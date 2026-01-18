@@ -33,8 +33,12 @@ services:
       DB_ENV_MYSQL_PASSWORD: ${DB_PASSWORD}
       DB_ENV_MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
       MOODLE_URL: http://localhost:${MOODLE_PORT}
+      PHP_UPLOAD_MAX_FILESIZE: 512M
+      PHP_POST_MAX_SIZE: 512M
+      PHP_MEMORY_LIMIT: 256M
     volumes:
       - moodledata:/var/moodledata
+      - ./php.ini:/etc/php/7.4/apache2/conf.d/99-moodle.ini
 
 volumes:
   moodle_db_data:
