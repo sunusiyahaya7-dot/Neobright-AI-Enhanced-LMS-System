@@ -39,3 +39,26 @@ class MoodleService:
             )
 
         return data
+    
+    @staticmethod
+    def get_course_contents(course_id: int):
+        """
+        Fetch topics/sections and resources for a course.
+        """
+        url = MoodleService._build_url("core_course_get_contents")
+        params = {
+            "courseid": course_id
+        }
+
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+
+        data = response.json()
+
+        if isinstance(data, dict) and "exception" in data:
+            raise RuntimeError(
+                f"Moodle error: {data.get('exception')} - {data.get('message')}"
+            )
+
+        return data
+
