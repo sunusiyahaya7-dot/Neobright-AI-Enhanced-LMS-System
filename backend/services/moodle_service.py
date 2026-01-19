@@ -62,3 +62,21 @@ class MoodleService:
 
         return data
 
+    @staticmethod
+    def get_file_url(file_path: str) -> str:
+        """Build secure Moodle file URL using server-side token."""
+        base_url = current_app.config["MOODLE_BASE_URL"].rstrip("/")
+        token = current_app.config["MOODLE_TOKEN"]
+        
+        if not token:
+            raise ValueError("MOODLE_TOKEN is not set in environment")
+         
+        return f"{base_url}/webservice/pluginfile.php/{file_path}?token={token}"
+
+    @staticmethod
+    def fetch_file_stream(file_url: str):
+        """Stream a file from Moodle without loading it fully into memory."""
+        response = requests.get(file_url, stream=True, timeout=30)
+        response.raise_for_status()
+
+        return response
