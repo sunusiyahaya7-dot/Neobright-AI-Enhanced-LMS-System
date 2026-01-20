@@ -4,6 +4,7 @@ from flask_cors import CORS
 from config import Config
 from api.moodle_routes import moodle_bp
 from routes.pluginfile import pluginfile_bp
+from routes.enrollment_routes import enrollment_bp
 import firebase_admin
 from firebase_admin import credentials, auth as firebase_auth
 import os
@@ -27,6 +28,7 @@ def create_app():
     # Register blueprints
     app.register_blueprint(moodle_bp)
     app.register_blueprint(pluginfile_bp)
+    app.register_blueprint(enrollment_bp)  # Add this
 
     # Simple health check route
     @app.route("/health", methods=["GET"])
