@@ -1,13 +1,13 @@
 """Moodle API Routes - Authenticated endpoints."""
 
 from flask import Blueprint, jsonify
-from middleware.auth import verify_firebase_token
 from services.moodle_service import MoodleService
+from auth.firebase_auth import firebase_required
 
-moodle_bp = Blueprint("moodle", __name__, url_prefix="/api")
+moodle_bp = Blueprint("moodle", __name__, url_prefix="/api/moodle")
 
 @moodle_bp.route("/courses", methods=["GET"])
-@verify_firebase_token
+@firebase_required
 def get_courses():
     """Retrieve courses - Firebase authenticated."""
     try:
@@ -25,8 +25,8 @@ def get_courses():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
-@moodle_bp.route("/course/<int:course_id>/contents", methods=["GET"])
-@verify_firebase_token
+@moodle_bp.route("/courses/<int:course_id>/contents", methods=["GET"])
+@firebase_required
 def get_course_contents(course_id):
     """Get course contents - Firebase authenticated."""
     try:
