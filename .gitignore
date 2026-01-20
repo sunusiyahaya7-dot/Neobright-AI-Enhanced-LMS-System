@@ -20,6 +20,9 @@ venv/
 firebase-debug.log
 firestore-debug.log
 serviceAccountKey.json
+# Firebase service account
+firebase-service-account.json
+*-service-account.json
 
 # ---- Docker ----
 *.tar

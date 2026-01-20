@@ -1,13 +1,15 @@
 """Moodle pluginfile.php proxy - Secure file streaming with server-side token."""
 
 import requests
-from flask import Blueprint, Response, stream_with_context, abort
+from flask import Blueprint, request, Response, stream_with_context, abort
 from services.moodle_service import MoodleService
+from auth.firebase_auth import firebase_required
 
-pluginfile_bp = Blueprint("pluginfile", __name__)
+pluginfile_bp = Blueprint("pluginfile", __name__, url_prefix="/api/pluginfile")
 
-@pluginfile_bp.route("/api/moodle/pluginfile.php/<path:file_path>", methods=["GET"])
-def proxy_pluginfile(file_path):
+@pluginfile_bp.route("/<path:file_path>", methods=["GET"])
+@firebase_required
+def proxy_file(file_path):
     """
     Secure proxy for Moodle pluginfile.php endpoint.
     Frontend never sees Moodle token - handled server-side only.

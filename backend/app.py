@@ -4,6 +4,9 @@ from flask_cors import CORS
 from config import Config
 from api.moodle_routes import moodle_bp
 from routes.pluginfile import pluginfile_bp
+import firebase_admin
+from firebase_admin import credentials, auth as firebase_auth
+import os
 
 def create_app():
     app = Flask(__name__)
@@ -11,6 +14,15 @@ def create_app():
     
     # Enable CORS
     CORS(app)
+
+    # Firebase Admin init (once)
+    if not firebase_admin._apps:
+        cred_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH")
+        if cred_path and os.path.exists(cred_path):
+            cred = credentials.Certificate(cred_path)
+            firebase_admin.initialize_app(cred)
+        else:
+            raise ValueError("Firebase service account file not found or FIREBASE_SERVICE_ACCOUNT_PATH not set")
 
     # Register blueprints
     app.register_blueprint(moodle_bp)
@@ -23,6 +35,7 @@ def create_app():
             "status": "ok",
             "moodle_base_url": app.config["MOODLE_BASE_URL"]
         })
+    
 
     return app
 
