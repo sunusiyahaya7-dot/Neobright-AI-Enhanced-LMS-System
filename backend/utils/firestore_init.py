@@ -2,7 +2,21 @@
 Firestore initialization and index creation helper.
 Run this once to set up Firestore indexes and collections.
 """
-from firebase_admin import firestore
+import os
+import firebase_admin
+from firebase_admin import credentials, firestore
+
+# Initialize Firebase Admin
+if not firebase_admin._apps:
+    cred_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH")
+    if not cred_path:
+        cred_path = os.path.join(os.path.dirname(__file__), '..', 'firebase-service-account.json')
+    
+    if os.path.exists(cred_path):
+        cred = credentials.Certificate(cred_path)
+        firebase_admin.initialize_app(cred)
+    else:
+        raise ValueError(f"Firebase service account not found. Set FIREBASE_SERVICE_ACCOUNT_PATH or place file at: {cred_path}")
 
 def initialize_firestore_indexes():
     """

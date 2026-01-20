@@ -3,6 +3,7 @@ Firestore database service for NeoBright LMS.
 Handles all database operations with proper error handling and validation.
 """
 from firebase_admin import firestore
+from google.cloud.firestore_v1 import FieldFilter
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from models.firestore_models import (
@@ -83,11 +84,12 @@ class FirestoreService:
         return doc_ref[1].id
     
     def get_course_materials(self, moodle_course_id: int) -> List[Dict]:
-        """Get all materials for a course."""
-        docs = self.db.collection('course_materials')\
-            .where('moodle_course_id', '==', moodle_course_id)\
-            .order_by('order_index')\
+        docs = (
+            self.db.collection('course_materials')
+            .where(filter=FieldFilter('moodle_course_id', '==', moodle_course_id))
+            .order_by('order_index')
             .stream()
+        )
         return [doc.to_dict() for doc in docs]
     
     def get_material(self, material_id: str) -> Optional[Dict]:
@@ -104,19 +106,18 @@ class FirestoreService:
         return doc_ref[1].id
     
     def get_material_summaries(self, material_id: str) -> List[Dict]:
-        """Get all summaries for a material."""
-        docs = self.db.collection('summaries')\
-            .where('material_id', '==', material_id)\
-            .order_by('generated_at', direction=firestore.Query.DESCENDING)\
+        docs = (
+            self.db.collection('summaries')
+            .where(filter=FieldFilter('material_id', '==', material_id))
+            .order_by('generated_at', direction=firestore.Query.DESCENDING)
             .stream()
+        )
         return [doc.to_dict() for doc in docs]
     
     def get_user_summaries(self, user_id: str, moodle_course_id: Optional[int] = None) -> List[Dict]:
-        """Get user's summaries, optionally filtered by course."""
-        query = self.db.collection('summaries').where('user_id', '==', user_id)
+        query = self.db.collection('summaries').where(filter=FieldFilter('user_id', '==', user_id))
         if moodle_course_id:
-            query = query.where('moodle_course_id', '==', moodle_course_id)
-        
+            query = query.where(filter=FieldFilter('moodle_course_id', '==', moodle_course_id))
         docs = query.order_by('generated_at', direction=firestore.Query.DESCENDING).stream()
         return [doc.to_dict() for doc in docs]
     
@@ -144,11 +145,9 @@ class FirestoreService:
         return doc.to_dict() if doc.exists else None
     
     def get_user_chats(self, user_id: str, moodle_course_id: Optional[int] = None) -> List[Dict]:
-        """Get user's chat sessions, optionally filtered by course."""
-        query = self.db.collection('ai_chats').where('user_id', '==', user_id)
+        query = self.db.collection('ai_chats').where(filter=FieldFilter('user_id', '==', user_id))
         if moodle_course_id:
-            query = query.where('moodle_course_id', '==', moodle_course_id)
-        
+            query = query.where(filter=FieldFilter('moodle_course_id', '==', moodle_course_id))
         docs = query.order_by('updated_at', direction=firestore.Query.DESCENDING).stream()
         return [doc.to_dict() for doc in docs]
     
@@ -162,16 +161,20 @@ class FirestoreService:
     
     def get_course_assignments(self, moodle_course_id: int) -> List[Dict]:
         """Get all assignments for a course."""
-        docs = self.db.collection('assignments')\
-            .where('moodle_course_id', '==', moodle_course_id)\
+        docs = (
+            self.db.collection('assignments')
+            .where(filter=FieldFilter('moodle_course_id', '==', moodle_course_id))
             .stream()
+        )
         return [doc.to_dict() for doc in docs]
     
     def get_user_assignments(self, user_id: str) -> List[Dict]:
         """Get assignments assigned to user."""
-        docs = self.db.collection('assignments')\
-            .where('assigned_to', 'array_contains', user_id)\
+        docs = (
+            self.db.collection('assignments')
+            .where(filter=FieldFilter('assigned_to', 'array_contains', user_id))
             .stream()
+        )
         return [doc.to_dict() for doc in docs]
     
     # ==================== FEEDBACK ====================
@@ -184,7 +187,61 @@ class FirestoreService:
     
     def get_feedback_by_reference(self, reference_id: str) -> List[Dict]:
         """Get all feedback for a specific reference (summary, chat, etc.)."""
-        docs = self.db.collection('feedback_logs')\
-            .where('reference_id', '==', reference_id)\
+        docs = (
+            self.db.collection('feedback_logs')
+            .where(filter=FieldFilter('reference_id', '==', reference_id))
             .stream()
+        )
         return [doc.to_dict() for doc in docs]
+
+    # ==================== ENROLLMENTS ====================
+    
+    def create_enrollment(self, user_id: str, moodle_course_id: int) -> str:
+        """Create course enrollment."""
+        enrollment = {
+            'user_id': user_id,
+            'moodle_course_id': moodle_course_id,
+            'status': 'active',
+            'enrolled_at': datetime.utcnow(),
+            'progress': 0,
+            'completed_sections': []
+        }
+        doc_ref = self.db.collection('enrollments').add(enrollment)
+        
+        # Also update user's enrolled_courses
+        self.add_enrolled_course(user_id, moodle_course_id)
+        
+        return doc_ref[1].id
+    
+    def get_user_enrollments(self, user_id: str) -> List[Dict]:
+        """Get all enrollments for a user."""
+        docs = (
+            self.db.collection('enrollments')
+            .where(filter=FieldFilter('user_id', '==', user_id))
+            .where(filter=FieldFilter('status', '==', 'active'))
+            .stream()
+        )
+        return [doc.to_dict() for doc in docs]
+    
+    def update_enrollment_progress(self, enrollment_id: str, progress: int, completed_section: str = None) -> None:
+        """Update enrollment progress."""
+        data = {
+            'progress': progress,
+            'updated_at': datetime.utcnow()
+        }
+        if completed_section:
+            data['completed_sections'] = firestore.ArrayUnion([completed_section])
+        
+        self.db.collection('enrollments').document(enrollment_id).update(data)
+    
+    def get_enrollment(self, user_id: str, moodle_course_id: int) -> Optional[Dict]:
+        """Get specific enrollment."""
+        docs = (
+            self.db.collection('enrollments')
+            .where(filter=FieldFilter('user_id', '==', user_id))
+            .where(filter=FieldFilter('moodle_course_id', '==', moodle_course_id))
+            .limit(1)
+            .stream()
+        )
+        enrollments = [doc.to_dict() for doc in docs]
+        return enrollments[0] if enrollments else None

@@ -4,7 +4,7 @@ Collections: users, courses, course_materials, summaries, ai_chats, assignments,
 """
 from datetime import datetime
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from enum import Enum
 
 class UserRole(Enum):
@@ -32,10 +32,10 @@ class User:
     display_name: str
     role: str  # UserRole enum value
     moodle_user_id: Optional[int] = None
-    enrolled_courses: List[int] = None  # List of Moodle course IDs
-    preferences: Dict[str, Any] = None
-    created_at: datetime = None
-    updated_at: datetime = None
+    enrolled_courses: List[int] = field(default_factory=list)
+    preferences: Dict[str, Any] = field(default_factory=dict)
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     
     def to_dict(self) -> Dict:
         data = asdict(self)
@@ -53,11 +53,11 @@ class Course:
     short_name: str
     category: Optional[str] = None
     summary: Optional[str] = None
-    instructor_ids: List[str] = None  # Firebase UIDs
-    enrolled_student_ids: List[str] = None  # Firebase UIDs
+    instructor_ids: List[str] = field(default_factory=list)
+    enrolled_student_ids: List[str] = field(default_factory=list)
     total_materials: int = 0
-    synced_at: datetime = None
-    created_at: datetime = None
+    synced_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
     
     def to_dict(self) -> Dict:
         data = asdict(self)
@@ -75,15 +75,15 @@ class CourseMaterial:
     moodle_module_id: int
     title: str
     type: str  # MaterialType enum value
-    file_url: Optional[str] = None  # Moodle pluginfile URL
-    content: Optional[str] = None  # Text content for non-file materials
+    file_url: Optional[str] = None
+    content: Optional[str] = None
     file_size: Optional[int] = None
     mime_type: Optional[str] = None
     section_name: Optional[str] = None
     order_index: int = 0
     is_downloadable: bool = True
-    created_at: datetime = None
-    updated_at: datetime = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     
     def to_dict(self) -> Dict:
         data = asdict(self)
@@ -96,15 +96,15 @@ class CourseMaterial:
 @dataclass
 class Summary:
     """AI-generated summary of course materials."""
-    summary_id: str  # Auto-generated
-    material_id: str  # Reference to CourseMaterial
+    summary_id: str
+    material_id: str
     moodle_course_id: int
-    user_id: str  # Firebase UID of requester
+    user_id: str
     summary_text: str
-    key_points: List[str] = None
+    key_points: List[str] = field(default_factory=list)
     model_used: str = "GPT-4o-mini"
     tokens_used: int = 0
-    generated_at: datetime = None
+    generated_at: Optional[datetime] = None
     
     def to_dict(self) -> Dict:
         data = asdict(self)
@@ -117,7 +117,7 @@ class ChatMessage:
     """Individual message in an AI chat session."""
     role: str  # ChatRole enum value
     content: str
-    timestamp: datetime = None
+    timestamp: Optional[datetime] = None
     
     def to_dict(self) -> Dict:
         data = asdict(self)
@@ -128,16 +128,16 @@ class ChatMessage:
 @dataclass
 class AIChat:
     """AI chat session for a specific course/material."""
-    chat_id: str  # Auto-generated
-    user_id: str  # Firebase UID
+    chat_id: str
+    user_id: str
     moodle_course_id: int
-    material_id: Optional[str] = None  # If chat is about specific material
+    material_id: Optional[str] = None
     title: str = "New Chat"
-    messages: List[Dict] = None  # List of ChatMessage dicts
+    messages: List[Dict] = field(default_factory=list)
     total_tokens: int = 0
     model_used: str = "GPT-4o-mini"
-    created_at: datetime = None
-    updated_at: datetime = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     
     def to_dict(self) -> Dict:
         data = asdict(self)
@@ -150,15 +150,15 @@ class AIChat:
 @dataclass
 class Assignment:
     """Assignment/task tracking."""
-    assignment_id: str  # Auto-generated or Moodle assignment ID
+    assignment_id: str
     moodle_course_id: int
-    moodle_assignment_id: Optional[int] = None
     title: str
+    moodle_assignment_id: Optional[int] = None
     description: Optional[str] = None
     due_date: Optional[datetime] = None
     max_grade: Optional[float] = None
-    assigned_to: List[str] = None  # Firebase UIDs of students
-    created_at: datetime = None
+    assigned_to: List[str] = field(default_factory=list)
+    created_at: Optional[datetime] = None
     
     def to_dict(self) -> Dict:
         data = asdict(self)
@@ -171,14 +171,14 @@ class Assignment:
 @dataclass
 class FeedbackLog:
     """User feedback on AI responses, summaries, etc."""
-    feedback_id: str  # Auto-generated
-    user_id: str  # Firebase UID
+    feedback_id: str
+    user_id: str
     feedback_type: str  # "summary", "chat", "general"
-    reference_id: Optional[str] = None  # ID of summary/chat/etc.
-    rating: Optional[int] = None  # 1-5 stars
+    reference_id: Optional[str] = None
+    rating: Optional[int] = None
     comment: Optional[str] = None
     is_helpful: Optional[bool] = None
-    created_at: datetime = None
+    created_at: Optional[datetime] = None
     
     def to_dict(self) -> Dict:
         data = asdict(self)
