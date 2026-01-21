@@ -1,80 +1,86 @@
+import { auth } from '../firebase'
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
   User,
-  AuthError,
-} from "firebase/auth";
-import { auth } from "../firebase";
+  GoogleAuthProvider,
+  signInWithPopup,
+} from 'firebase/auth'
+
+const googleProvider = new GoogleAuthProvider()
 
 /**
- * Register user with email and password via Firebase.
+ * Register with email and password
  */
 export function registerWithEmail(email: string, password: string) {
-  return createUserWithEmailAndPassword(auth, email, password);
+  return createUserWithEmailAndPassword(auth, email, password)
 }
 
 /**
- * Login user with email and password via Firebase.
+ * Login with email and password
  */
 export function loginWithEmail(email: string, password: string) {
-  return signInWithEmailAndPassword(auth, email, password);
+  return signInWithEmailAndPassword(auth, email, password)
 }
 
 /**
- * Logout current Firebase user.
+ * Login with Google popup
+ */
+export function loginWithGoogle() {
+  return signInWithPopup(auth, googleProvider)
+}
+
+/**
+ * Logout current user
  */
 export function logout() {
-  return signOut(auth);
+  return signOut(auth)
 }
 
 /**
- * Observe Firebase auth state changes.
- * Callback fires when user logs in/out.
- */
-export function observeAuthState(callback: (user: User | null) => void) {
-  return onAuthStateChanged(auth, callback);
-}
-
-/**
- * Get Firebase ID token for the currently authenticated user.
- * Returns null if no user is logged in.
+ * Get Firebase ID token for current user
  */
 export async function getIdToken(): Promise<string | null> {
-  const user = auth.currentUser;
+  const user = auth.currentUser
   if (user) {
     try {
-      const token = await user.getIdToken();
-      return token;
+      return await user.getIdToken()
     } catch (error) {
-      console.error("Error getting ID token:", error);
-      return null;
+      console.error('Error getting ID token:', error)
+      return null
     }
   }
-  return null;
+  return null
 }
 
 /**
- * Force refresh the ID token (useful when token expires).
+ * Force refresh ID token
  */
 export async function refreshIdToken(): Promise<string | null> {
-  const user = auth.currentUser;
+  const user = auth.currentUser
   if (user) {
     try {
-      const token = await user.getIdToken(true); // true = force refresh
-      return token;
+      return await user.getIdToken(true) // true = force refresh
     } catch (error) {
-      console.error("Error refreshing ID token:", error);
-      return null;
+      console.error('Error refreshing ID token:', error)
+      return null
     }
   }
-  return null;
+  return null
 }
 
 /**
- * Get current authenticated user.
+ * Get current user
  */
 export function getCurrentUser(): User | null {
-  return auth.currentUser;
+  return auth.currentUser
+}
+
+/**
+ * Subscribe to auth state changes
+ */
+export function onAuthStateChange(callback: (user: User | null) => void) {
+  return onAuthStateChanged(auth, callback)
 }
