@@ -8,28 +8,38 @@ import {
   GoogleAuthProvider,
   signInWithPopup,
 } from 'firebase/auth'
+import { createOrUpdateUserProfile } from './userService'
 
 const googleProvider = new GoogleAuthProvider()
 
 /**
  * Register with email and password
  */
-export function registerWithEmail(email: string, password: string) {
-  return createUserWithEmailAndPassword(auth, email, password)
+export async function registerWithEmail(email: string, password: string) {
+  const userCredential = await createUserWithEmailAndPassword(auth, email, password)
+  // Create user profile in Firestore
+  await createOrUpdateUserProfile(userCredential.user)
+  return userCredential
 }
 
 /**
  * Login with email and password
  */
-export function loginWithEmail(email: string, password: string) {
-  return signInWithEmailAndPassword(auth, email, password)
+export async function loginWithEmail(email: string, password: string) {
+  const userCredential = await signInWithEmailAndPassword(auth, email, password)
+  // Create or update user profile in Firestore
+  await createOrUpdateUserProfile(userCredential.user)
+  return userCredential
 }
 
 /**
  * Login with Google popup
  */
-export function loginWithGoogle() {
-  return signInWithPopup(auth, googleProvider)
+export async function loginWithGoogle() {
+  const userCredential = await signInWithPopup(auth, googleProvider)
+  // Create or update user profile in Firestore
+  await createOrUpdateUserProfile(userCredential.user)
+  return userCredential
 }
 
 /**
