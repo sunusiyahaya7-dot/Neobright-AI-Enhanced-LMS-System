@@ -6,7 +6,7 @@ import { getIdToken } from "../services/authService";
  * All requests to Flask backend include Authorization header.
  */
 const api: AxiosInstance = axios.create({
-  baseURL: process.env.REACT_APP_API_BASE_URL || "http://localhost:5000/api",
+  baseURL: import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api",
   timeout: 30000,
 });
 
@@ -17,7 +17,9 @@ api.interceptors.request.use(
   async (config: InternalAxiosRequestConfig) => {
     const token = await getIdToken();
     if (token) {
-      config.headers = config.headers || {};
+      if (!config.headers) {
+        config.headers = {} as any;
+      }
       config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
