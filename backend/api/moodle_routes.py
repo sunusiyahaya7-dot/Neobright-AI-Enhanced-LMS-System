@@ -1,9 +1,29 @@
 """Moodle API Routes - Authenticated endpoints."""
 
-from flask import Blueprint, jsonify, g, request
+from flask import Blueprint, jsonify, g, request, current_app
 from services.moodle_service import MoodleService
 from services.firestore_service import FirestoreService
 from auth.firebase_auth import firebase_required
+
+
+def _to_proxy_url(fileurl: str | None) -> str | None:
+        """Convert a Moodle pluginfile URL into our secure proxy URL.
+
+        Moodle returns file URLs like:
+            http(s)://<MOODLE>/webservice/pluginfile.php/<file_path>
+
+        Frontend should instead call:
+            /api/pluginfile/<file_path>
+        """
+        if not fileurl:
+                return None
+
+        base_url = (current_app.config.get("MOODLE_BASE_URL") or "").rstrip("/")
+        prefix = f"{base_url}/webservice/pluginfile.php/"
+        if fileurl.startswith(prefix):
+                file_path = fileurl[len(prefix):]
+                return f"/api/pluginfile/{file_path}"
+        return None
 
 moodle_bp = Blueprint("moodle", __name__, url_prefix="/api/moodle")
 
@@ -167,6 +187,7 @@ def get_course_contents(course_id):
                     module_data["files"].append({
                         "filename": content.get("filename"),
                         "fileurl": content.get("fileurl"),
+                        "proxy_url": _to_proxy_url(content.get("fileurl")),
                         "mimetype": content.get("mimetype"),
                         "filesize": content.get("filesize")
                     })

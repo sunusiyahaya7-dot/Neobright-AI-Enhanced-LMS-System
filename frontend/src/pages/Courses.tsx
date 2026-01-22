@@ -17,7 +17,6 @@ interface Course {
   fullname: string;
   shortname: string;
   summary?: string;
-  progress?: number;
 }
 
 export default function Courses() {
@@ -36,12 +35,8 @@ export default function Courses() {
     try {
       setLoading(true);
       const data = await getCourses();
-      // Add mock progress and status for UI purposes
-      const coursesWithData = (data.courses || []).map((course: Course, index: number) => ({
-        ...course,
-        progress: Math.floor(Math.random() * 100), // Mock progress - can be replaced with real data
-      }));
-      setCourses(coursesWithData);
+      // Progress is not available from Moodle by default in this app; keep it undefined for now.
+      setCourses(data.courses || []);
     } catch (err: any) {
       console.error('Failed to fetch courses:', err);
       setError(err.response?.data?.error || 'Failed to load courses');
@@ -55,29 +50,8 @@ export default function Courses() {
     return colors[index % colors.length];
   };
 
-  const getCourseInsight = (course: Course, index: number) => {
-    const insights = [
-      '🕓 2 quizzes due soon',
-      '🏆 Highest engagement in this course',
-      "📘 You've not opened Topic 3 yet",
-      '✅ On track with assignments',
-      '📚 New materials uploaded',
-      '⏰ Assignment deadline approaching',
-    ];
-    return insights[index % insights.length];
-  };
-
-  const getNextDeadline = (index: number) => {
-    const deadlines = [
-      '2 quizzes due soon',
-      '1 assignment due Friday',
-      'Reading overdue',
-      'Lab due next week',
-      'Quiz tomorrow',
-      'No upcoming deadlines',
-    ];
-    return deadlines[index % deadlines.length];
-  };
+  // Progress, deadlines, and AI insights will be added once we wire in
+  // Moodle completion + calendar/assignments endpoints.
 
   const filters = [
     { id: 'all', label: 'All Courses', count: courses.length },
@@ -91,9 +65,7 @@ export default function Courses() {
     course.shortname.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const averageProgress = courses.length > 0
-    ? Math.round(courses.reduce((sum, c) => sum + (c.progress || 0), 0) / courses.length)
-    : 0;
+  const averageProgress: number | null = null;
 
   if (loading) {
     return (
@@ -185,7 +157,7 @@ export default function Courses() {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.1 }}
-                      onClick={() => navigate(`/courses/${course.id}`)}
+                      onClick={() => navigate(`/courses/${course.id}`, { state: { course } })}
                       className="bg-white dark:bg-[#1A1C20] rounded-2xl p-6 shadow-sm dark:shadow-none border border-transparent dark:border-[#2A2D32] hover:shadow-lg dark:hover:border-[#2C7CF0]/30 transition-all cursor-pointer relative overflow-hidden"
                     >
                       {/* Course Header */}
@@ -206,40 +178,12 @@ export default function Courses() {
                         </div>
                       </div>
 
-                      {/* Progress Bar */}
-                      <div className="mb-4">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm text-gray-600 dark:text-gray-400">Progress</span>
-                          <span
-                            className="text-sm font-bold"
-                            style={{ color: getCourseColor(index) }}
-                          >
-                            {course.progress || 0}%
-                          </span>
+                      {/* Summary (from Moodle) */}
+                      {course.summary ? (
+                        <div className="mt-3 text-sm text-gray-600 dark:text-gray-400 line-clamp-3">
+                          {course.summary.replace(/<[^>]*>/g, '')}
                         </div>
-                        <div className="w-full h-2 bg-gray-200 dark:bg-[#111418] rounded-full overflow-hidden">
-                          <motion.div
-                            initial={{ width: 0 }}
-                            animate={{ width: `${course.progress || 0}%` }}
-                            transition={{ duration: 1, ease: 'easeOut' }}
-                            className="h-full rounded-full"
-                            style={{ backgroundColor: getCourseColor(index) }}
-                          />
-                        </div>
-                      </div>
-
-                      {/* Next Deadline */}
-                      <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 mb-3">
-                        <Clock size={16} />
-                        <span>{getNextDeadline(index)}</span>
-                      </div>
-
-                      {/* AI Insight */}
-                      <div className="p-3 bg-gradient-to-r from-[#1E5BF0]/5 to-[#2C7CF0]/5 dark:from-[#1E5BF0]/10 dark:to-[#2C7CF0]/10 rounded-lg">
-                        <p className="text-xs font-medium text-gray-700 dark:text-gray-300">
-                          {getCourseInsight(course, index)}
-                        </p>
-                      </div>
+                      ) : null}
                     </motion.div>
                   ))}
                 </div>
@@ -277,12 +221,12 @@ export default function Courses() {
                 <div className="mb-6">
                   <div className="flex items-center justify-between mb-3">
                     <span className="text-sm text-gray-600 dark:text-gray-400">Average Progress</span>
-                    <span className="text-2xl font-bold text-[#1ABC9C]">{averageProgress}%</span>
+                    <span className="text-2xl font-bold text-[#1ABC9C]">{averageProgress === null ? '—' : `${averageProgress}%`}</span>
                   </div>
                   <div className="w-full h-2 bg-gray-200 dark:bg-[#111418] rounded-full overflow-hidden">
                     <div
                       className="h-full bg-[#1ABC9C]"
-                      style={{ width: `${averageProgress}%` }}
+                      style={{ width: `${averageProgress ?? 0}%` }}
                     />
                   </div>
                 </div>

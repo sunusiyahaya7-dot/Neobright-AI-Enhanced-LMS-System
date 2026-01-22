@@ -40,7 +40,7 @@ export const getCourses = async () => {
  * Fetch course contents/modules from Moodle
  */
 export const getCourseContents = async (courseId: number) => {
-  const res = await api.get(`/enrollment/courses/${courseId}/materials`);
+  const res = await api.get(`/moodle/courses/${courseId}/contents`);
   return res.data;
 };
 
