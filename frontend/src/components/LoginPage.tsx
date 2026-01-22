@@ -161,7 +161,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="student@uniten.edu.my"
+                    placeholder="studentID@studentuniten.edu.my"
                     required
                     className="w-full pl-12 pr-4 py-3.5 bg-[#F5F6FA] dark:bg-[#111418] border border-gray-200 dark:border-[#2A2D32] rounded-xl focus:outline-none focus:border-[#1E5BF0] dark:focus:border-[#2C7CF0] focus:ring-2 focus:ring-[#1E5BF0]/20 dark:focus:ring-[#2C7CF0]/20 text-gray-900 dark:text-white transition-all"
                   />

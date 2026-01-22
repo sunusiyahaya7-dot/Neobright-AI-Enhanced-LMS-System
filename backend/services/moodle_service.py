@@ -39,6 +39,51 @@ class MoodleService:
             )
 
         return data
+
+    @staticmethod
+    def get_user_courses(moodle_user_id: int):
+        """Fetch only the courses a specific Moodle user is enrolled in.
+
+        Uses Moodle core_enrol_get_users_courses.
+        """
+        url = MoodleService._build_url("core_enrol_get_users_courses")
+        params = {"userid": moodle_user_id}
+
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        if isinstance(data, dict) and "exception" in data:
+            raise RuntimeError(
+                f"Moodle error: {data.get('exception')} - {data.get('message')}"
+            )
+
+        return data
+
+    @staticmethod
+    def get_users_by_field(field: str, values: list[str]):
+        """Lookup Moodle users by a specific field.
+
+        Uses Moodle core_user_get_users_by_field.
+        Common fields: "email", "username", "id".
+        """
+        url = MoodleService._build_url("core_user_get_users_by_field")
+
+        # Moodle expects values[0], values[1], ...
+        params = {"field": field}
+        for idx, value in enumerate(values):
+            params[f"values[{idx}]"] = value
+
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        if isinstance(data, dict) and "exception" in data:
+            raise RuntimeError(
+                f"Moodle error: {data.get('exception')} - {data.get('message')}"
+            )
+
+        return data
     
     @staticmethod
     def get_course_contents(course_id: int):

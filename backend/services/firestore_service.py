@@ -36,6 +36,11 @@ class FirestoreService:
         """Update user profile."""
         data['updated_at'] = datetime.utcnow()
         self.db.collection('users').document(firebase_uid).update(data)
+
+    def set_user_fields(self, firebase_uid: str, data: Dict) -> None:
+        """Upsert user fields (creates doc if missing)."""
+        data['updated_at'] = datetime.utcnow()
+        self.db.collection('users').document(firebase_uid).set(data, merge=True)
     
     def add_enrolled_course(self, firebase_uid: str, moodle_course_id: int) -> None:
         """Add course to user's enrolled courses."""

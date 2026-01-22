@@ -36,8 +36,14 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Token expired or invalid - user should re-login
-      console.error("Unauthorized: Token expired or invalid");
+      const backendError = error.response?.data?.error;
+      const backendDetails = error.response?.data?.details;
+      // Helpful debug output: tells us whether the token was missing vs actually invalid.
+      console.error(
+        "Unauthorized:",
+        backendError || "Request unauthorized",
+        backendDetails ? `(details: ${backendDetails})` : ""
+      );
     }
     return Promise.reject(error);
   }
