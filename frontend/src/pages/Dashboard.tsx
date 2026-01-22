@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { getUserProfile, UserProfile } from '../services/userService';
-import api from '../api/client';
+import { getCourses } from '../services/moodleService';
 import Layout from '../components/Layout';
 import { 
   BookOpen, 
@@ -11,7 +11,7 @@ import {
   Brain,
   TrendingUp,
   Zap,
-  MessageSquare
+  Calendar
 } from 'lucide-react';
 
 interface Course {
@@ -36,14 +36,14 @@ export default function Dashboard() {
     
     try {
       setLoading(true);
-      // Load user profile
+      // Load user profile from Firestore
       const profile = await getUserProfile(user.uid);
       setUserProfile(profile);
 
-      // Load enrolled courses
+      // Load enrolled courses from Moodle via backend API
       try {
-        const response = await api.get('/enrollment/courses');
-        setCourses(response.data.courses || []);
+        const coursesData = await getCourses();
+        setCourses(coursesData.courses || []);
       } catch (err) {
         console.error('Failed to load courses:', err);
       }
@@ -209,6 +209,3 @@ export default function Dashboard() {
     </Layout>
   );
 }
-
-// Import Calendar icon
-import { Calendar } from 'lucide-react';

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { logout } from '../services/authService';
-import api from '../api/client';
+import { getCourseContents } from '../services/moodleService';
 import { FileText, LogOut, Loader2, Download } from 'lucide-react';
 
 interface Material {
@@ -34,8 +34,8 @@ export default function CourseContent() {
   const fetchCourseContent = async () => {
     try {
       setLoading(true);
-      const response = await api.get(`/enrollment/courses/${id}/materials`);
-      setCourse(response.data);
+      const data = await getCourseContents(Number(id));
+      setCourse(data);
     } catch (err: any) {
       console.error('Failed to fetch course content:', err);
       setError(err.response?.data?.error || 'Failed to load course content');
