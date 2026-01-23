@@ -45,6 +45,14 @@ export const getCourseContents = async (courseId: number) => {
 };
 
 /**
+ * Fetch all assignments for a course
+ */
+export const getCourseAssignments = async (courseId: number) => {
+  const res = await api.get(`/courses/${courseId}/assignments`);
+  return res.data;
+};
+
+/**
  * Fetch course details
  */
 export const getCourseDetails = async (courseId: number) => {
@@ -58,5 +66,20 @@ export const getCourseDetails = async (courseId: number) => {
  */
 export const linkMoodleAccount = async (params?: { email?: string; username?: string }) => {
   const res = await api.post("/moodle/link", params || {});
+  return res.data;
+};
+
+/**
+ * Submit a file to an assignment
+ */
+export const submitAssignment = async (courseId: number, assignmentId: number, file: File) => {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const res = await api.post(`/courses/${courseId}/assignments/${assignmentId}/submit`, formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
   return res.data;
 };

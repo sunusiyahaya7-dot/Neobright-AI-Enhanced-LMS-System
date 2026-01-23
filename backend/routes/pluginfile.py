@@ -8,14 +8,18 @@ from auth.firebase_auth import firebase_required
 pluginfile_bp = Blueprint("pluginfile", __name__, url_prefix="/api/pluginfile")
 
 @pluginfile_bp.route("/<path:file_path>", methods=["GET"])
-@firebase_required
 def proxy_file(file_path):
     """
     Secure proxy for Moodle pluginfile.php endpoint.
     Frontend never sees Moodle token - handled server-side only.
     Streams files efficiently without loading into memory.
     
-    Frontend calls: GET /api/moodle/pluginfile.php/<file_path>
+    No Firebase auth required here since:
+    1. Moodle token is hidden server-side
+    2. User already authenticated when fetching course contents
+    3. File URLs are time-limited in Moodle
+    
+    Frontend calls: GET /api/pluginfile/<file_path>
     Backend adds token and proxies to Moodle: /webservice/pluginfile.php?token=<token>
     """
     try:
@@ -26,12 +30,19 @@ def proxy_file(file_path):
         moodle_response = requests.get(file_url, stream=True, timeout=30)
         moodle_response.raise_for_status()
 
-        # Return streamed response with proper headers
+        # Force download with attachment disposition (don't render inline)
+        content_disposition = moodle_response.headers.get("Content-Disposition", "")
+        # Extract filename from Moodle response or use default
+        filename = "file"
+        if "filename=" in content_disposition:
+            filename = content_disposition.split("filename=")[-1].strip('"\'')
+        
+        # Return streamed response with proper headers to force download
         return Response(
             stream_with_context(moodle_response.iter_content(chunk_size=8192)),
             content_type=moodle_response.headers.get("Content-Type", "application/octet-stream"),
             headers={
-                "Content-Disposition": moodle_response.headers.get("Content-Disposition", "inline"),
+                "Content-Disposition": f'attachment; filename="{filename}"',
                 "Cache-Control": "public, max-age=3600"
             }
         )

@@ -16,6 +16,25 @@ class FirestoreService:
     
     def __init__(self):
         self.db = firestore.client()
+        from services.firestore_extensions import FirestoreExtensions
+        self.extensions = FirestoreExtensions(self.db)
+    
+    @staticmethod
+    def timestamp_now():
+        """Return current timestamp for Firestore."""
+        return datetime.utcnow()
+    
+    def store_assignment_submission(self, user_id: str, course_id: int, assignment_id: int, submission_data: Dict) -> str:
+        """Store assignment submission in Firestore."""
+        return self.extensions.store_assignment_submission(user_id, course_id, assignment_id, submission_data)
+    
+    def get_user_assignment_submissions(self, user_id: str, course_id: int) -> List[Dict]:
+        """Get all assignment submissions for a user in a course."""
+        return self.extensions.get_user_assignment_submissions(user_id, course_id)
+    
+    def sync_course_materials(self, course_id: int, materials: List[Dict]) -> None:
+        """Sync course materials from Moodle to Firestore."""
+        return self.extensions.sync_course_materials(course_id, materials)
     
     # ==================== USERS ====================
     
@@ -106,70 +125,47 @@ class FirestoreService:
         doc = self.db.collection('course_materials').document(material_id).get()
         return doc.to_dict() if doc.exists else None
     
-    # ==================== SUMMARIES ====================
-    
-    def create_summary(self, summary: Summary) -> str:
-        """Create AI-generated summary."""
-        summary.generated_at = datetime.utcnow()
-        doc_ref = self.db.collection('summaries').add(summary.to_dict())
-        return doc_ref[1].id
-    
     def get_material_summaries(self, material_id: str) -> List[Dict]:
+        """Get all summaries for a material."""
         docs = (
-            self.db.collection('summaries')
-            .where(filter=FieldFilter('material_id', '==', material_id))
-            .order_by('generated_at', direction=firestore.Query.DESCENDING)
+            self.db.collection('course_materials')
+            .document(material_id)
+            .collection('summaries')
             .stream()
         )
         return [doc.to_dict() for doc in docs]
     
-    def get_user_summaries(self, user_id: str, moodle_course_id: Optional[int] = None) -> List[Dict]:
-        query = self.db.collection('summaries').where(filter=FieldFilter('user_id', '==', user_id))
-        if moodle_course_id:
-            query = query.where(filter=FieldFilter('moodle_course_id', '==', moodle_course_id))
-        docs = query.order_by('generated_at', direction=firestore.Query.DESCENDING).stream()
-        return [doc.to_dict() for doc in docs]
-    
-    # ==================== AI CHATS ====================
-    
-    def create_chat(self, chat: AIChat) -> str:
-        """Create new AI chat session."""
-        chat.created_at = datetime.utcnow()
-        chat.updated_at = datetime.utcnow()
-        chat.messages = chat.messages or []
-        doc_ref = self.db.collection('ai_chats').add(chat.to_dict())
+    def add_summary(self, material_id: str, summary: Summary) -> str:
+        """Add summary to a material."""
+        summary.generated_at = datetime.utcnow()
+        doc_ref = (
+            self.db.collection('course_materials')
+            .document(material_id)
+            .collection('summaries')
+            .add(summary.to_dict())
+        )
         return doc_ref[1].id
     
-    def add_chat_message(self, chat_id: str, message: ChatMessage) -> None:
-        """Add message to chat session."""
-        message.timestamp = datetime.utcnow()
-        self.db.collection('ai_chats').document(chat_id).update({
-            'messages': firestore.ArrayUnion([message.to_dict()]),
-            'updated_at': datetime.utcnow()
+    def update_material_processed(self, material_id: str, extracted_text: str, ai_insights: List[str]) -> None:
+        """Update material with processed data."""
+        self.db.collection('course_materials').document(material_id).update({
+            'extracted_text': extracted_text,
+            'ai_insights': ai_insights,
+            'processed': True,
+            'processed_at': datetime.utcnow()
         })
-    
-    def get_chat(self, chat_id: str) -> Optional[Dict]:
-        """Get chat session by ID."""
-        doc = self.db.collection('ai_chats').document(chat_id).get()
-        return doc.to_dict() if doc.exists else None
-    
-    def get_user_chats(self, user_id: str, moodle_course_id: Optional[int] = None) -> List[Dict]:
-        query = self.db.collection('ai_chats').where(filter=FieldFilter('user_id', '==', user_id))
-        if moodle_course_id:
-            query = query.where(filter=FieldFilter('moodle_course_id', '==', moodle_course_id))
-        docs = query.order_by('updated_at', direction=firestore.Query.DESCENDING).stream()
-        return [doc.to_dict() for doc in docs]
     
     # ==================== ASSIGNMENTS ====================
     
     def create_assignment(self, assignment: Assignment) -> str:
         """Create new assignment."""
         assignment.created_at = datetime.utcnow()
+        assignment.updated_at = datetime.utcnow()
         doc_ref = self.db.collection('assignments').add(assignment.to_dict())
         return doc_ref[1].id
     
     def get_course_assignments(self, moodle_course_id: int) -> List[Dict]:
-        """Get all assignments for a course."""
+        """Get all assignments in a course."""
         docs = (
             self.db.collection('assignments')
             .where(filter=FieldFilter('moodle_course_id', '==', moodle_course_id))
@@ -177,67 +173,71 @@ class FirestoreService:
         )
         return [doc.to_dict() for doc in docs]
     
-    def get_user_assignments(self, user_id: str) -> List[Dict]:
-        """Get assignments assigned to user."""
+    def get_assignment(self, assignment_id: int) -> Optional[Dict]:
+        """Get assignment by Moodle assignment ID."""
         docs = (
             self.db.collection('assignments')
-            .where(filter=FieldFilter('assigned_to', 'array_contains', user_id))
+            .where(filter=FieldFilter('moodle_assignment_id', '==', assignment_id))
+            .limit(1)
             .stream()
         )
-        return [doc.to_dict() for doc in docs]
+        assignments = [doc.to_dict() for doc in docs]
+        return assignments[0] if assignments else None
     
-    # ==================== FEEDBACK ====================
+    def update_assignment_submission_status(self, assignment_id: int, user_id: str, status: str) -> None:
+        """Update assignment submission status for user."""
+        docs = (
+            self.db.collection('assignment_submissions')
+            .where(filter=FieldFilter('assignment_id', '==', assignment_id))
+            .where(filter=FieldFilter('user_id', '==', user_id))
+            .limit(1)
+            .stream()
+        )
+        for doc in docs:
+            doc.reference.update({'status': status, 'updated_at': datetime.utcnow()})
     
-    def create_feedback(self, feedback: FeedbackLog) -> str:
-        """Create feedback log."""
-        feedback.created_at = datetime.utcnow()
-        doc_ref = self.db.collection('feedback_logs').add(feedback.to_dict())
+    # ==================== CHAT HISTORY ====================
+    
+    def save_chat_message(self, chat_id: str, message: ChatMessage) -> str:
+        """Save a chat message."""
+        message.timestamp = datetime.utcnow()
+        doc_ref = (
+            self.db.collection('ai_chats')
+            .document(chat_id)
+            .collection('messages')
+            .add(message.to_dict())
+        )
         return doc_ref[1].id
     
-    def get_feedback_by_reference(self, reference_id: str) -> List[Dict]:
-        """Get all feedback for a specific reference (summary, chat, etc.)."""
+    def get_chat_messages(self, chat_id: str) -> List[Dict]:
+        """Get all messages in a chat."""
         docs = (
-            self.db.collection('feedback_logs')
-            .where(filter=FieldFilter('reference_id', '==', reference_id))
+            self.db.collection('ai_chats')
+            .document(chat_id)
+            .collection('messages')
+            .order_by('timestamp')
             .stream()
         )
         return [doc.to_dict() for doc in docs]
-
+    
     # ==================== ENROLLMENTS ====================
     
-    def create_enrollment(self, user_id: str, moodle_course_id: int) -> str:
-        """Create course enrollment."""
-        enrollment = {
+    def create_enrollment(self, user_id: str, moodle_course_id: int, enrollment_data: Dict) -> str:
+        """Create course enrollment record."""
+        enrollment_id = f"{user_id}_{moodle_course_id}"
+        data = {
+            **enrollment_data,
             'user_id': user_id,
             'moodle_course_id': moodle_course_id,
-            'status': 'active',
             'enrolled_at': datetime.utcnow(),
-            'progress': 0,
-            'completed_sections': []
-        }
-        doc_ref = self.db.collection('enrollments').add(enrollment)
-        
-        # Also update user's enrolled_courses
-        self.add_enrolled_course(user_id, moodle_course_id)
-        
-        return doc_ref[1].id
-    
-    def get_user_enrollments(self, user_id: str) -> List[Dict]:
-        """Get all enrollments for a user."""
-        docs = (
-            self.db.collection('enrollments')
-            .where(filter=FieldFilter('user_id', '==', user_id))
-            .where(filter=FieldFilter('status', '==', 'active'))
-            .stream()
-        )
-        return [doc.to_dict() for doc in docs]
-    
-    def update_enrollment_progress(self, enrollment_id: str, progress: int, completed_section: str = None) -> None:
-        """Update enrollment progress."""
-        data = {
-            'progress': progress,
             'updated_at': datetime.utcnow()
         }
+        self.db.collection('enrollments').document(enrollment_id).set(data, merge=True)
+        return enrollment_id
+    
+    def update_enrollment(self, enrollment_id: str, data: Dict, completed_section: int = None) -> None:
+        """Update enrollment record."""
+        data['updated_at'] = datetime.utcnow()
         if completed_section:
             data['completed_sections'] = firestore.ArrayUnion([completed_section])
         

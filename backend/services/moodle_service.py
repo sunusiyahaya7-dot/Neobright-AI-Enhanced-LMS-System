@@ -51,6 +51,7 @@ class MoodleService:
 
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
+
         data = response.json()
 
         if isinstance(data, dict) and "exception" in data:
@@ -61,39 +62,29 @@ class MoodleService:
         return data
 
     @staticmethod
-    def get_users_by_field(field: str, values: list[str]):
-        """Lookup Moodle users by a specific field.
-
-        Uses Moodle core_user_get_users_by_field.
-        Common fields: "email", "username", "id".
-        """
-        url = MoodleService._build_url("core_user_get_users_by_field")
-
-        # Moodle expects values[0], values[1], ...
-        params = {"field": field}
-        for idx, value in enumerate(values):
-            params[f"values[{idx}]"] = value
+    def get_course_contents(course_id: int):
+        """Fetch course contents (sections + modules + files) from Moodle."""
+        url = MoodleService._build_url("core_course_get_contents")
+        params = {"courseid": course_id}
 
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
+
         data = response.json()
 
         if isinstance(data, dict) and "exception" in data:
-            raise RuntimeError(
-                f"Moodle error: {data.get('exception')} - {data.get('message')}"
-            )
+            raise RuntimeError(f"Moodle error: {data.get('exception')}")
 
         return data
-    
+
     @staticmethod
-    def get_course_contents(course_id: int):
+    def get_assignment_details(course_id: int):
         """
-        Fetch topics/sections and resources for a course.
+        Fetch assignment details including introattachments.
+        Uses mod_assign_get_assignments.
         """
-        url = MoodleService._build_url("core_course_get_contents")
-        params = {
-            "courseid": course_id
-        }
+        url = MoodleService._build_url("mod_assign_get_assignments")
+        params = {"courseids[0]": course_id}
 
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
@@ -125,3 +116,115 @@ class MoodleService:
         response.raise_for_status()
 
         return response
+    
+    @staticmethod
+    def submit_assignment(assignment_id: int, file_data, filename: str):
+        """
+        Submit a file to a Moodle assignment.
+        
+        Process:
+        1. Upload file to Moodle draft file area
+        2. Save submission with uploaded file via mod_assign_save_submission
+        3. Submit for grading via mod_assign_submit_for_grading
+        
+        Returns submission response from Moodle or raises exception on failure.
+        """
+        try:
+            # Step 1: Upload file to draft area
+            print(f"Uploading file {filename} to Moodle draft area...")
+            upload_url = MoodleService._build_upload_url()
+            
+            # Reset file pointer to beginning in case it was read
+            if hasattr(file_data, 'seek'):
+                file_data.seek(0)
+            
+            files = {'file': (filename, file_data)}
+            upload_response = requests.post(upload_url, files=files, timeout=30)
+            upload_response.raise_for_status()
+            
+            upload_data = upload_response.json()
+            print(f"Upload response: {upload_data}")
+            
+            # Check if upload was successful
+            if not upload_data or len(upload_data) == 0:
+                raise ValueError("File upload failed - no response from Moodle")
+            
+            draft_item_id = upload_data[0].get('itemid')
+            if not draft_item_id:
+                raise ValueError(f"File upload failed - no itemid returned. Response: {upload_data}")
+            
+            print(f"File uploaded successfully with draft_item_id: {draft_item_id}")
+            
+            # Step 2: Save submission with uploaded file
+            print(f"Saving submission for assignment {assignment_id}...")
+            save_url = MoodleService._build_url("mod_assign_save_submission")
+            save_params = {
+                'assignmentid': assignment_id,
+                'plugindata[files_filemanager]': draft_item_id
+            }
+            
+            save_response = requests.post(save_url, data=save_params, timeout=10)
+            save_response.raise_for_status()
+            save_data = save_response.json()
+            
+            if isinstance(save_data, dict) and "exception" in save_data:
+                raise RuntimeError(f"Moodle error: {save_data.get('exception')} - {save_data.get('message')}")
+            
+            print(f"Submission saved: {save_data}")
+            
+            # Step 3: Submit for grading
+            print(f"Submitting for grading...")
+            submit_url = MoodleService._build_url("mod_assign_submit_for_grading")
+            submit_params = {
+                'assignmentid': assignment_id,
+                'acceptsubmissionstatement': 1
+            }
+            
+            submit_response = requests.post(submit_url, data=submit_params, timeout=10)
+            submit_response.raise_for_status()
+            submit_data = submit_response.json()
+            
+            if isinstance(submit_data, dict) and "exception" in submit_data:
+                raise RuntimeError(f"Moodle error: {submit_data.get('exception')} - {submit_data.get('message')}")
+            
+            print(f"Assignment submitted successfully: {submit_data}")
+            
+            # Return success response
+            return {
+                "success": True,
+                "message": "Assignment submitted successfully to Moodle",
+                "filename": filename,
+                "timestamp": MoodleService._get_timestamp(),
+                "draft_item_id": draft_item_id,
+                "moodle_response": submit_data
+            }
+        
+        except Exception as e:
+            print(f"Error submitting assignment to Moodle: {e}")
+            import traceback
+            traceback.print_exc()
+            # Still return a response so Firestore can log it, but indicate Moodle submission failed
+            return {
+                "success": False,
+                "message": f"Failed to submit to Moodle: {str(e)}",
+                "filename": filename,
+                "timestamp": MoodleService._get_timestamp(),
+                "error": str(e)
+            }
+    
+    @staticmethod
+    def _build_upload_url() -> str:
+        """Build Moodle file upload URL for draft files."""
+        base_url = current_app.config["MOODLE_BASE_URL"].rstrip("/")
+        token = current_app.config["MOODLE_TOKEN"]
+        
+        if not token:
+            raise ValueError("MOODLE_TOKEN is not set in environment")
+        
+        return f"{base_url}/webservice/upload.php?token={token}"
+    
+    @staticmethod
+    def _get_timestamp():
+        """Get current timestamp in Moodle format."""
+        from datetime import datetime
+        return int(datetime.utcnow().timestamp())
