@@ -249,6 +249,75 @@ def get_course_assignments(course_id: int):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@materials_bp.route("/<int:course_id>/assignments/<int:assignment_id>/details", methods=["GET"])
+@firebase_required
+def get_submission_details(course_id: int, assignment_id: int):
+    """
+    Fetch detailed submission information from Moodle.
+    
+    Returns:
+    - Submission status (draft, submitted, etc.)
+    - Grade and grading information
+    - Teacher feedback/comments
+    - Whether student can edit/delete submission
+    """
+    try:
+        user_id = g.firebase_uid
+        print(f"Fetching submission details - User: {user_id}, Course: {course_id}, Assignment: {assignment_id}")
+        
+        # Fetch submission status from Moodle
+        submission_status = MoodleService.get_submission_status(assignment_id)
+        print(f"Retrieved submission details: {submission_status}")
+        
+        return jsonify({
+            "success": True,
+            "assignment_id": assignment_id,
+            "course_id": course_id,
+            "submission_details": submission_status
+        })
+    
+    except Exception as e:
+        print(f"Error fetching submission details for assignment {assignment_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@materials_bp.route("/<int:course_id>/assignments/<int:assignment_id>/delete", methods=["DELETE"])
+@firebase_required
+def delete_submission(course_id: int, assignment_id: int):
+    """
+    Delete a student's submission from Moodle and Firestore.
+    """
+    try:
+        user_id = g.firebase_uid
+        print(f"Deleting submission - User: {user_id}, Course: {course_id}, Assignment: {assignment_id}")
+        
+        # Delete from Moodle
+        print(f"Attempting Moodle deletion...")
+        moodle_result = MoodleService.delete_submission(assignment_id)
+        print(f"Moodle deletion result: {moodle_result}")
+        
+        # Delete from Firestore
+        print(f"Attempting Firestore deletion...")
+        fs = FirestoreService()
+        fs.delete_assignment_submission(user_id, course_id, assignment_id)
+        print(f"Firestore deletion completed")
+        
+        return jsonify({
+            "success": True,
+            "message": "Submission deleted successfully",
+            "moodle_success": moodle_result.get("success", False),
+            "moodle_message": moodle_result.get("message", "")
+        })
+    
+    except Exception as e:
+        print(f"Error deleting submission for assignment {assignment_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @materials_bp.route("/<int:course_id>/assignments/<int:assignment_id>/submit", methods=["POST"])
 @firebase_required
 def submit_assignment(course_id: int, assignment_id: int):

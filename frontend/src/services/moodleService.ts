@@ -83,3 +83,19 @@ export const submitAssignment = async (courseId: number, assignmentId: number, f
   });
   return res.data;
 };
+
+/**
+ * Fetch submission details including grade, feedback, and grading info
+ */
+export const getSubmissionDetails = async (courseId: number, assignmentId: number) => {
+  const res = await api.get(`/courses/${courseId}/assignments/${assignmentId}/details`);
+  return res.data;
+};
+
+/**
+ * Delete a submission from Moodle and Firestore
+ */
+export const deleteSubmission = async (courseId: number, assignmentId: number) => {
+  const res = await api.delete(`/courses/${courseId}/assignments/${assignmentId}/delete`);
+  return res.data;
+};

@@ -224,6 +224,83 @@ class MoodleService:
         return f"{base_url}/webservice/upload.php?token={token}"
     
     @staticmethod
+    def get_submission_status(assignment_id: int):
+        """
+        Fetch submission status and grading details from Moodle.
+        
+        Returns detailed submission info including:
+        - Submission status (draft, submitted, etc.)
+        - Grade (if graded)
+        - Feedback/comments from teacher
+        - Whether student can edit/delete submission
+        """
+        try:
+            print(f"Fetching submission status for assignment {assignment_id}...")
+            url = MoodleService._build_url("mod_assign_get_submission_status")
+            params = {"assignmentid": assignment_id}
+            
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            print(f"Submission status response: {data}")
+            
+            # Check for Moodle errors
+            if isinstance(data, dict) and "exception" in data:
+                error_msg = f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                print(f"Error from Moodle: {error_msg}")
+                raise RuntimeError(error_msg)
+            
+            return data
+        
+        except Exception as e:
+            print(f"Error fetching submission status for assignment {assignment_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            # Return empty response instead of failing
+            return {"submission": None, "feedback": None}
+    
+    @staticmethod
+    def delete_submission(assignment_id: int):
+        """
+        Delete a student's submission from Moodle.
+        
+        Returns response from Moodle or raises exception on failure.
+        """
+        try:
+            print(f"Attempting to delete submission for assignment {assignment_id}...")
+            url = MoodleService._build_url("mod_assign_delete_submission")
+            params = {"assignmentid": assignment_id}
+            
+            response = requests.post(url, data=params, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            print(f"Delete response from Moodle: {data}")
+            
+            # Check for Moodle errors
+            if isinstance(data, dict) and "exception" in data:
+                raise RuntimeError(
+                    f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                )
+            
+            return {
+                "success": True,
+                "message": "Submission deleted successfully",
+                "timestamp": MoodleService._get_timestamp()
+            }
+        
+        except Exception as e:
+            print(f"Error deleting submission for assignment {assignment_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "success": False,
+                "message": f"Failed to delete submission: {str(e)}",
+                "error": str(e)
+            }
+    
+    @staticmethod
     def _get_timestamp():
         """Get current timestamp in Moodle format."""
         from datetime import datetime

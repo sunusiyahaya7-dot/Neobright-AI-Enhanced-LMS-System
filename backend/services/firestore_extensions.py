@@ -36,6 +36,19 @@ class FirestoreExtensions:
         )
         return [doc.to_dict() for doc in docs]
     
+    def delete_assignment_submission(self, user_id: str, course_id: int, assignment_id: int) -> None:
+        """Delete an assignment submission from Firestore."""
+        docs = (
+            self.db.collection('assignment_submissions')
+            .where(filter=FieldFilter('user_id', '==', user_id))
+            .where(filter=FieldFilter('course_id', '==', course_id))
+            .where(filter=FieldFilter('assignment_id', '==', assignment_id))
+            .stream()
+        )
+        
+        for doc in docs:
+            doc.reference.delete()
+    
     def sync_course_materials(self, course_id: int, materials: List[Dict]) -> None:
         """Sync course materials from Moodle to Firestore."""
         for material in materials:
