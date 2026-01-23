@@ -89,10 +89,14 @@ class FirestoreService:
         return doc_ref[1].id
     
     def get_course_materials(self, moodle_course_id: int) -> List[Dict]:
+        """Get course materials for a given Moodle course.
+        
+        Note: Removed order_by to avoid requiring composite indexes.
+        Materials are returned in document order.
+        """
         docs = (
             self.db.collection('course_materials')
             .where(filter=FieldFilter('moodle_course_id', '==', moodle_course_id))
-            .order_by('order_index')
             .stream()
         )
         return [doc.to_dict() for doc in docs]

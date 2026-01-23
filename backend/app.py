@@ -5,6 +5,7 @@ from config import Config
 from api.moodle_routes import moodle_bp
 from routes.pluginfile import pluginfile_bp
 from routes.enrollment_routes import enrollment_bp
+from routes.materials_routes import materials_bp
 import firebase_admin
 from firebase_admin import credentials
 import os
@@ -33,6 +34,7 @@ def create_app():
 
     # Register blueprints
     app.register_blueprint(moodle_bp)
+    app.register_blueprint(materials_bp)
     app.register_blueprint(pluginfile_bp)
     app.register_blueprint(enrollment_bp)  
 

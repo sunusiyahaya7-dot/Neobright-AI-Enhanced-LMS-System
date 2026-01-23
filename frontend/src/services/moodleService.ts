@@ -37,10 +37,10 @@ export const getCourses = async () => {
 };
 
 /**
- * Fetch course contents/modules from Moodle
+ * Fetch unified course materials: Moodle contents + Firestore processed materials
  */
 export const getCourseContents = async (courseId: number) => {
-  const res = await api.get(`/moodle/courses/${courseId}/contents`);
+  const res = await api.get(`/courses/${courseId}/materials`);
   return res.data;
 };
 
