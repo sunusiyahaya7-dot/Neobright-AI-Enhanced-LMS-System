@@ -40,6 +40,12 @@ interface CourseSection {
   modules: CourseModule[];
 }
 
+interface ProcessedModule {
+  summaries?: Array<{ content: string; generated_at: string }>;
+  extracted_text?: string;
+  ai_insights?: string[];
+}
+
 export default function CourseContent() {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
@@ -47,6 +53,7 @@ export default function CourseContent() {
 
   const [activeTab, setActiveTab] = useState<'modules' | 'assignments' | 'quizzes' | 'grades'>('modules');
   const [sections, setSections] = useState<CourseSection[]>([]);
+  const [processedMap, setProcessedMap] = useState<Record<string, ProcessedModule>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -63,8 +70,11 @@ export default function CourseContent() {
       setLoading(true);
       const data = await getCourseContents(Number(id));
 
-      const rawSections: CourseSection[] = data?.data || [];
+      const rawSections: CourseSection[] = data?.moodle_sections || [];
+      const processed: Record<string, ProcessedModule> = data?.processed || {};
+
       setSections(rawSections);
+      setProcessedMap(processed);
 
       // Default: expand the first section that has modules.
       const first = rawSections.find((s) => (s.modules || []).length > 0);
@@ -239,53 +249,77 @@ export default function CourseContent() {
 
                                 {isOpen ? (
                                   <div className="px-5 pb-5 space-y-3">
-                                    {(section.modules || []).map((mod) => (
-                                      <div
-                                        key={mod.id}
-                                        className="bg-gray-50 dark:bg-[#111418] rounded-xl p-4 border border-gray-200 dark:border-[#2A2D32]"
-                                      >
-                                        <div className="flex items-start justify-between gap-4">
-                                          <div className="min-w-0">
-                                            <p className="font-medium text-gray-900 dark:text-white truncate">
-                                              {mod.name || 'Untitled module'}
-                                            </p>
-                                            <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                                              {mod.modname || 'resource'} • {(mod.files || []).length} files
-                                            </p>
+                                    {(section.modules || []).map((mod) => {
+                                      const processed = processedMap[String(mod.id)];
+                                      return (
+                                        <div
+                                          key={mod.id}
+                                          className="bg-gray-50 dark:bg-[#111418] rounded-xl p-4 border border-gray-200 dark:border-[#2A2D32]"
+                                        >
+                                          <div className="flex items-start justify-between gap-4">
+                                            <div className="min-w-0">
+                                              <p className="font-medium text-gray-900 dark:text-white truncate">
+                                                {mod.name || 'Untitled module'}
+                                              </p>
+                                              <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                                                {mod.modname || 'resource'} • {(mod.files || []).length} files
+                                                {processed ? ' • 💡 AI-ready' : ''}
+                                              </p>
+                                            </div>
                                           </div>
-                                        </div>
 
-                                        {(mod.files || []).length > 0 ? (
-                                          <div className="mt-3 space-y-2">
-                                            {mod.files.map((f, idx) => (
-                                              <div
-                                                key={`${mod.id}-${idx}`}
-                                                className="flex items-center justify-between gap-3 bg-white dark:bg-[#1A1C20] rounded-lg px-3 py-2 border border-gray-200 dark:border-[#2A2D32]"
-                                              >
-                                                <div className="flex items-center gap-2 min-w-0">
-                                                  <FileText size={16} className="text-[#1E5BF0] flex-shrink-0" />
-                                                  <span className="text-sm text-gray-800 dark:text-gray-200 truncate">
-                                                    {f.filename || 'File'}
-                                                  </span>
-                                                </div>
+                                          {/* Moodle Files */}
+                                          {(mod.files || []).length > 0 ? (
+                                            <div className="mt-3 space-y-2">
+                                              {mod.files.map((f, idx) => (
+                                                <div
+                                                  key={`${mod.id}-${idx}`}
+                                                  className="flex items-center justify-between gap-3 bg-white dark:bg-[#1A1C20] rounded-lg px-3 py-2 border border-gray-200 dark:border-[#2A2D32]"
+                                                >
+                                                  <div className="flex items-center gap-2 min-w-0">
+                                                    <FileText size={16} className="text-[#1E5BF0] flex-shrink-0" />
+                                                    <span className="text-sm text-gray-800 dark:text-gray-200 truncate">
+                                                      {f.filename || 'File'}
+                                                    </span>
+                                                  </div>
 
-                                                {(f.proxy_url || f.fileurl) ? (
-                                                  <a
-                                                    href={f.proxy_url || f.fileurl}
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
-                                                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#1E5BF0] text-white text-sm hover:bg-[#184AD0] transition-colors"
-                                                  >
-                                                    <Download size={14} />
-                                                    Open
+                                                  {(f.proxy_url || f.fileurl) ? (
+                                                    <a
+                                                      href={f.proxy_url || f.fileurl}
+                                                      target="_blank"
+                                                      rel="noopener noreferrer"
+                                                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#1E5BF0] text-white text-sm hover:bg-[#184AD0] transition-colors flex-shrink-0"
+                                                    >
+                                                      <Download size={14} />
+                                                      Open
                                                   </a>
                                                 ) : null}
                                               </div>
                                             ))}
                                           </div>
                                         ) : null}
-                                      </div>
-                                    ))}
+
+                                          {/* Processed Materials (Summaries/AI Insights) */}
+                                          {processed && (processed.summaries?.length || 0) > 0 ? (
+                                            <div className="mt-4 pt-4 border-t border-gray-200 dark:border-[#2A2D32]">
+                                              <p className="text-xs font-semibold text-[#1E5BF0] mb-2 flex items-center gap-1">
+                                                💡 AI Summaries
+                                              </p>
+                                              <div className="space-y-2">
+                                                {processed.summaries?.slice(0, 2).map((s, idx) => (
+                                                  <div
+                                                    key={idx}
+                                                    className="text-xs text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1A1C20] rounded px-3 py-2 line-clamp-2"
+                                                  >
+                                                    {s.content || 'Summary available'}
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                      );
+                                    })}
                                   </div>
                                 ) : null}
                               </div>
