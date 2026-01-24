@@ -301,6 +301,61 @@ class MoodleService:
             }
     
     @staticmethod
+    def get_course_progress(course_id: int, moodle_user_id: int):
+        """
+        Fetch activity completion status for a student in a course.
+        
+        Uses Moodle core_completion_get_activities_completion_status.
+        
+        Args:
+            course_id: Moodle course ID
+            moodle_user_id: Moodle user ID (student)
+        
+        Returns:
+            Dict with statuses list:
+            {
+                "statuses": [
+                    {
+                        "cmid": 12,
+                        "completed": true,
+                        "state": 1,
+                        "timecompleted": 1713452231
+                    }
+                ]
+            }
+        """
+        try:
+            print(f"Fetching progress for course {course_id}, user {moodle_user_id}...")
+            url = MoodleService._build_url(
+                "core_completion_get_activities_completion_status"
+            )
+            params = {
+                "courseid": course_id,
+                "userid": moodle_user_id
+            }
+            
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            print(f"Progress response: {data}")
+            
+            # Check for Moodle errors
+            if isinstance(data, dict) and "exception" in data:
+                error_msg = f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                print(f"Error from Moodle: {error_msg}")
+                raise RuntimeError(error_msg)
+            
+            return data
+        
+        except Exception as e:
+            print(f"Error fetching course progress for course {course_id}, user {moodle_user_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            # Return empty response instead of failing
+            return {"statuses": []}
+    
+    @staticmethod
     def _get_timestamp():
         """Get current timestamp in Moodle format."""
         from datetime import datetime

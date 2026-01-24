@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getCourses } from '../services/moodleService';
+import { progressService, ProgressOverview } from '../services/progressService';
 import Layout from '../components/Layout';
 import {
   BookOpen,
@@ -64,6 +65,8 @@ export default function Courses() {
   const [error, setError] = useState('');
   const [selectedFilter, setSelectedFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [progressData, setProgressData] = useState<Record<number, ProgressOverview>>({});
+  const [progressLoading, setProgressLoading] = useState(false);
 
   useEffect(() => {
     fetchCourses();
@@ -74,11 +77,31 @@ export default function Courses() {
       setLoading(true);
       const data = await getCourses();
       setCourses(data.courses || []);
+      
+      // Fetch progress data
+      fetchProgress();
     } catch (err: any) {
       console.error('Failed to fetch courses:', err);
       setError(err.response?.data?.error || 'Failed to load courses');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchProgress = async () => {
+    try {
+      setProgressLoading(true);
+      const overview = await progressService.getProgressOverview();
+      const progressMap: Record<number, ProgressOverview> = {};
+      overview.forEach(p => {
+        progressMap[p.courseId] = p;
+      });
+      setProgressData(progressMap);
+    } catch (err) {
+      console.error('Failed to fetch progress overview:', err);
+      // Continue without progress data
+    } finally {
+      setProgressLoading(false);
     }
   };
 
@@ -90,13 +113,16 @@ export default function Courses() {
 
   const filters = [
     { id: 'all', label: 'All Courses', count: courses.length },
-    { id: 'at-risk', label: 'At Risk', count: courses.filter(c => generateCourseMetadata(c.id).isAtRisk).length },
+    { id: 'at-risk', label: 'At Risk', count: courses.filter(c => {
+      const progress = progressData[c.id]?.progress || generateCourseMetadata(c.id).progress;
+      return progress < 35;
+    }).length },
   ];
 
   const filteredCourses = courses.filter((course) => {
     if (selectedFilter !== 'all') {
-      const metadata = generateCourseMetadata(course.id);
-      if (selectedFilter === 'at-risk' && !metadata.isAtRisk) return false;
+      const progress = progressData[course.id]?.progress || generateCourseMetadata(course.id).progress;
+      if (selectedFilter === 'at-risk' && progress >= 35) return false;
     }
     return (
       course.fullname.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -106,7 +132,10 @@ export default function Courses() {
 
   const avgProgress = courses.length > 0
     ? Math.round(
-        courses.reduce((sum, c) => sum + generateCourseMetadata(c.id).progress, 0) / courses.length
+        courses.reduce((sum, c) => {
+          const progress = progressData[c.id]?.progress || generateCourseMetadata(c.id).progress;
+          return sum + progress;
+        }, 0) / courses.length
       )
     : 0;
 
@@ -195,8 +224,10 @@ export default function Courses() {
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {filteredCourses.map((course, index) => {
-                    const metadata = generateCourseMetadata(course.id);
-                    const progressColor = getCourseColor(metadata.progress);
+                    const realProgress = progressData[course.id];
+                    const displayProgress = realProgress?.progress || generateCourseMetadata(course.id).progress;
+                    const progressColor = getCourseColor(displayProgress);
+                    const isAtRisk = displayProgress < 35;
                     return (
                       <motion.div
                         key={course.id}
@@ -207,7 +238,7 @@ export default function Courses() {
                         className="bg-white dark:bg-[#1A1C20] rounded-2xl p-6 shadow-sm dark:shadow-none border border-transparent dark:border-[#2A2D32] hover:shadow-lg dark:hover:border-[#2C7CF0]/30 transition-all cursor-pointer relative overflow-hidden"
                       >
                         {/* At Risk Badge */}
-                        {metadata.isAtRisk && (
+                        {isAtRisk && (
                           <div className="absolute top-4 right-4 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 px-3 py-1 rounded-lg text-xs font-semibold">
                             At Risk
                           </div>
@@ -236,14 +267,14 @@ export default function Courses() {
                           <div className="flex items-center justify-between mb-2">
                             <span className="text-xs font-medium text-gray-600 dark:text-gray-400">Progress</span>
                             <span className="text-sm font-semibold text-gray-900 dark:text-white">
-                              {metadata.progress}%
+                              {displayProgress}%
                             </span>
                           </div>
                           <div className="w-full h-2 bg-gray-200 dark:bg-[#111418] rounded-full overflow-hidden">
                             <div
                               className="h-full transition-all duration-300"
                               style={{
-                                width: `${metadata.progress}%`,
+                                width: `${displayProgress}%`,
                                 backgroundColor: progressColor,
                               }}
                             />
@@ -253,13 +284,13 @@ export default function Courses() {
                         {/* Next Deadline / Status */}
                         <div className="mb-3 p-3 bg-gray-50 dark:bg-[#111418] rounded-lg">
                           <p className="text-sm text-gray-700 dark:text-gray-300">
-                            {metadata.nextDeadline}
+                            {realProgress ? `${realProgress.completed}/${realProgress.total} activities completed` : generateCourseMetadata(course.id).nextDeadline}
                           </p>
                         </div>
 
                         {/* Insight */}
                         <div className="text-sm text-gray-600 dark:text-gray-400">
-                          {metadata.insight}
+                          {realProgress ? `Progress: ${displayProgress.toFixed(1)}%` : generateCourseMetadata(course.id).insight}
                         </div>
                       </motion.div>
                     );
