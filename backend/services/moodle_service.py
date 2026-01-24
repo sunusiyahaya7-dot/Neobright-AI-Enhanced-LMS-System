@@ -237,7 +237,7 @@ class MoodleService:
         try:
             print(f"Fetching submission status for assignment {assignment_id}...")
             url = MoodleService._build_url("mod_assign_get_submission_status")
-            params = {"assignmentid": assignment_id}
+            params = {"assignid": assignment_id}
             
             response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
