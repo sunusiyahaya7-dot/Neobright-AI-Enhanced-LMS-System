@@ -46,10 +46,11 @@ def get_course_progress(course_id):
         
         print(f"Fetching progress for course {course_id}, user {firebase_uid}, moodle_id {moodle_user_id}")
         
-        # Fetch and compute progress from Moodle
+        # Fetch and compute progress from Moodle + user completions overlay
         progress_data = ProgressService.fetch_and_compute_course_progress(
-            course_id, 
-            int(moodle_user_id)
+            course_id,
+            int(moodle_user_id),
+            firebase_uid
         )
         
         # Cache the progress
@@ -114,10 +115,11 @@ def get_progress_overview():
         for course in courses:
             course_id = course.get("id")
             
-            # Fetch and compute progress
+            # Fetch and compute progress (Moodle + user completions)
             progress_data = ProgressService.fetch_and_compute_course_progress(
                 course_id,
-                int(moodle_user_id)
+                int(moodle_user_id),
+                firebase_uid
             )
             
             # Cache progress

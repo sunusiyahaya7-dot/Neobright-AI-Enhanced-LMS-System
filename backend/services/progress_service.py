@@ -46,7 +46,7 @@ class ProgressService:
         }
     
     @staticmethod
-    def fetch_and_compute_course_progress(course_id: int, moodle_user_id: int) -> Dict:
+    def fetch_and_compute_course_progress(course_id: int, moodle_user_id: int, firebase_uid: Optional[str] = None) -> Dict:
         """
         Fetch progress from Moodle and compute metrics.
         
@@ -70,14 +70,52 @@ class ProgressService:
             # Step 1: Fetch raw progress data from Moodle
             raw_data = MoodleService.get_course_progress(course_id, moodle_user_id)
             statuses = raw_data.get("statuses", [])
-            
-            # Step 2: Compute progress metrics
-            metrics = ProgressService.compute_progress(statuses)
-            
-            # Step 3: Enrich with metadata
+
+            # Normalize Moodle statuses into completion booleans
+            def status_is_complete(s: Dict) -> bool:
+                try:
+                    # Moodle 'state': 1 means complete
+                    if s.get("state") == 1:
+                        return True
+                    # Some modules expose detailed rules
+                    for d in s.get("details", []) or []:
+                        rv = d.get("rulevalue") or {}
+                        if isinstance(rv, dict) and rv.get("status") == 1:
+                            return True
+                    return False
+                except Exception:
+                    return False
+
+            total = len(statuses)
+            completed_ids = set()
+            cmid_set = set()
+            for s in statuses:
+                cmid = s.get("cmid")
+                if cmid is not None:
+                    cmid_set.add(str(cmid))
+                if status_is_complete(s) and cmid is not None:
+                    completed_ids.add(str(cmid))
+
+            # Overlay user-marked completions from Firestore (if available)
+            if firebase_uid:
+                try:
+                    user_completions = ProgressService.get_course_completions(firebase_uid, course_id)
+                    for aid, is_done in (user_completions or {}).items():
+                        if is_done and ((not cmid_set) or (str(aid) in cmid_set)):
+                            completed_ids.add(str(aid))
+                except Exception as _:
+                    # Ignore overlay errors; fallback to Moodle-only
+                    pass
+
+            completed = len(completed_ids)
+            progress_percent = round((completed / total) * 100, 2) if total > 0 else 0.0
+
+            # Step 3: Build result with combined metrics
             result = {
                 "courseId": course_id,
-                **metrics,
+                "progress": progress_percent,
+                "completedActivities": completed,
+                "totalActivities": total,
                 "lastFetched": int(datetime.utcnow().timestamp())
             }
             

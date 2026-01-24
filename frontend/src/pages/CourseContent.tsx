@@ -164,9 +164,9 @@ export default function CourseContent() {
         // Update completions state
         setCompletions(prev => ({
           ...prev,
-          [activityId]: true
+          [String(activityId)]: true
         }));
-        // Refresh progress to reflect the update
+        // Refresh backend-computed progress (includes Moodle + user completions)
         fetchCourseProgress();
       }
     } catch (err) {
@@ -190,6 +190,19 @@ export default function CourseContent() {
   const totalFiles = useMemo(() => {
     return allModules.reduce((sum, m) => sum + (m.files?.length || 0), 0);
   }, [allModules]);
+
+  // Calculate activities done count (including both modules and assignments)
+  const activitiesDone = useMemo(() => {
+    const modulesDone = allModules.filter(m => completions[String(m.id)]).length;
+    const assignmentsDone = assignments.filter(a => 
+      completions[String(a.module_id || a.id)] || a.status === 'submitted'
+    ).length;
+    return modulesDone + assignmentsDone;
+  }, [completions, allModules, assignments]);
+
+  const totalActivities = useMemo(() => {
+    return allModules.length + assignments.length;
+  }, [allModules, assignments]);
 
   const toggleSection = (sectionId: string) => {
     setOpenSections((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }));
@@ -221,7 +234,7 @@ export default function CourseContent() {
                 <button className="px-4 py-2 rounded-xl bg-gray-100 dark:bg-[#111418] text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-[#1A1C20] transition-colors">
                   Focus Mode
                 </button>
-                {progressLoading ? (
+                {progressLoading && !progress ? (
                   <div className="flex items-center gap-2">
                     <div className="w-16 h-2 bg-gray-200 dark:bg-gray-700 rounded-full animate-pulse"></div>
                   </div>
@@ -233,6 +246,7 @@ export default function CourseContent() {
                     </div>
                     <p className="text-lg font-bold text-[#1ABC9C]">{progress.progress.toFixed(1)}%</p>
                     <p className="text-xs text-gray-500 dark:text-gray-400">{progress.completed}/{progress.total} completed</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Activities: {activitiesDone}/{totalActivities}</p>
                   </div>
                 ) : (
                   <div className="text-right">
