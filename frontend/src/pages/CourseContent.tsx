@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import Layout from '../components/Layout';
-import { getCourseContents } from '../services/moodleService';
+import ModuleDetailsModal from '../components/ModuleDetailsModal';
+import AssignmentDetailsModal from '../components/AssignmentDetailsModal';
+import { getCourseContents, getCourseAssignments } from '../services/moodleService';
 import {
   ChevronDown,
   ChevronRight,
@@ -33,6 +35,21 @@ interface CourseModule {
   files: ModuleFile[];
 }
 
+interface CourseAssignment {
+  id: number;
+  module_id: number;
+  assignment_id?: number;
+  name?: string;
+  description?: string;
+  intro_files?: ModuleFile[];
+  duedate?: number;
+  cutoffdate?: number;
+  allowsubmissionsfromdate?: number;
+  status?: string;
+  section_name?: string;
+  submitted_at?: string;
+}
+
 interface CourseSection {
   section_id?: number;
   section_name?: string;
@@ -53,11 +70,14 @@ export default function CourseContent() {
 
   const [activeTab, setActiveTab] = useState<'modules' | 'assignments' | 'quizzes' | 'grades'>('modules');
   const [sections, setSections] = useState<CourseSection[]>([]);
+  const [assignments, setAssignments] = useState<CourseAssignment[]>([]);
   const [processedMap, setProcessedMap] = useState<Record<string, ProcessedModule>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
+  const [selectedModule, setSelectedModule] = useState<{ module: CourseModule; sectionName?: string } | null>(null);
+  const [selectedAssignment, setSelectedAssignment] = useState<CourseAssignment | null>(null);
 
   useEffect(() => {
     if (id) {
@@ -68,12 +88,24 @@ export default function CourseContent() {
   const fetchCourseContent = async () => {
     try {
       setLoading(true);
-      const data = await getCourseContents(Number(id));
+      const [materialsData, assignmentsData] = await Promise.all([
+        getCourseContents(Number(id)),
+        getCourseAssignments(Number(id)).catch((err) => {
+          console.error('Failed to fetch assignments:', err);
+          return { assignments: [] };
+        })
+      ]);
 
-      const rawSections: CourseSection[] = data?.moodle_sections || [];
-      const processed: Record<string, ProcessedModule> = data?.processed || {};
+      console.log('Assignments data received:', assignmentsData);
+
+      const rawSections: CourseSection[] = materialsData?.moodle_sections || [];
+      const processed: Record<string, ProcessedModule> = materialsData?.processed || {};
+      const courseAssignments: CourseAssignment[] = assignmentsData?.assignments || [];
+
+      console.log('Course assignments parsed:', courseAssignments);
 
       setSections(rawSections);
+      setAssignments(courseAssignments);
       setProcessedMap(processed);
 
       // Default: expand the first section that has modules.
@@ -163,8 +195,8 @@ export default function CourseContent() {
                   <div className="flex gap-2 overflow-x-auto">
                     {(
                       [
-                        { id: 'modules', label: 'Modules' },
-                        { id: 'assignments', label: 'Assignments' },
+                        { id: 'modules', label: `Modules (${sections.length})` },
+                        { id: 'assignments', label: `Assignments (${assignments.length})` },
                         { id: 'quizzes', label: 'Quizzes' },
                         { id: 'grades', label: 'Grades' },
                       ] as const
@@ -186,7 +218,48 @@ export default function CourseContent() {
 
                 {/* Content */}
                 <div className="mt-6">
-                  {activeTab !== 'modules' ? (
+                  {activeTab === 'assignments' ? (
+                    <div className="space-y-4">
+                      {assignments.length === 0 ? (
+                        <div className="bg-white dark:bg-[#1A1C20] rounded-2xl p-10 shadow-sm dark:shadow-none border border-transparent dark:border-[#2A2D32] text-center">
+                          <FileText className="mx-auto text-gray-400" size={48} />
+                          <h4 className="mt-4 text-lg font-semibold text-gray-900 dark:text-white">
+                            No assignments
+                          </h4>
+                          <p className="mt-2 text-gray-600 dark:text-gray-400">
+                            This course has no assignments yet.
+                          </p>
+                        </div>
+                      ) : (
+                        assignments.map((assignment) => (
+                          <div
+                            key={assignment.id}
+                            onClick={() => setSelectedAssignment(assignment)}
+                            className="bg-white dark:bg-[#1A1C20] rounded-2xl p-6 shadow-sm dark:shadow-none border border-transparent dark:border-[#2A2D32] hover:border-[#1E5BF0] dark:hover:border-[#2C7CF0] hover:shadow-md transition-all cursor-pointer"
+                          >
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="flex-1">
+                                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                                  {assignment.name}
+                                </h3>
+                                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                                  {assignment.section_name}
+                                </p>
+                              </div>
+                              <span className="px-3 py-1 bg-[#1E5BF0]/10 text-[#1E5BF0] dark:bg-[#1E5BF0]/20 dark:text-[#4A9FFF] text-xs font-semibold rounded-lg">
+                                {assignment.status || 'Not submitted'}
+                              </span>
+                            </div>
+                            {assignment.duedate && (
+                              <p className="text-xs text-gray-600 dark:text-gray-400 mt-3">
+                                Due: {new Date(assignment.duedate * 1000).toLocaleDateString()}
+                              </p>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  ) : activeTab !== 'modules' ? (
                     <div className="bg-white dark:bg-[#1A1C20] rounded-2xl p-8 shadow-sm dark:shadow-none border border-transparent dark:border-[#2A2D32]">
                       <p className="text-gray-700 dark:text-gray-300">
                         {activeTab} view coming next.
@@ -254,11 +327,12 @@ export default function CourseContent() {
                                       return (
                                         <div
                                           key={mod.id}
-                                          className="bg-gray-50 dark:bg-[#111418] rounded-xl p-4 border border-gray-200 dark:border-[#2A2D32]"
+                                          onClick={() => setSelectedModule({ module: mod, sectionName: section.section_name })}
+                                          className="bg-gray-50 dark:bg-[#111418] rounded-xl p-4 border border-gray-200 dark:border-[#2A2D32] hover:border-[#1E5BF0] dark:hover:border-[#2C7CF0] hover:shadow-md transition-all cursor-pointer"
                                         >
                                           <div className="flex items-start justify-between gap-4">
-                                            <div className="min-w-0">
-                                              <p className="font-medium text-gray-900 dark:text-white truncate">
+                                            <div className="min-w-0 flex-1">
+                                              <p className="font-medium text-gray-900 dark:text-white truncate hover:text-[#1E5BF0]">
                                                 {mod.name || 'Untitled module'}
                                               </p>
                                               <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
@@ -268,8 +342,8 @@ export default function CourseContent() {
                                             </div>
                                           </div>
 
-                                          {/* Moodle Files */}
-                                          {(mod.files || []).length > 0 ? (
+                                          {/* Moodle Files - Show preview without opening modal */}
+                                          {(mod.files || []).length > 0 && (mod.files || []).length <= 2 ? (
                                             <div className="mt-3 space-y-2">
                                               {mod.files.map((f, idx) => (
                                                 <div
@@ -375,6 +449,31 @@ export default function CourseContent() {
           )}
         </div>
       </div>
+
+      {/* Module Details Modal */}
+      {selectedModule && (
+        <ModuleDetailsModal
+          isOpen={!!selectedModule}
+          onClose={() => setSelectedModule(null)}
+          module={selectedModule.module}
+          sectionName={selectedModule.sectionName}
+        />
+      )}
+
+      {/* Assignment Details Modal */}
+      {selectedAssignment && (
+        <AssignmentDetailsModal
+          isOpen={!!selectedAssignment}
+          onClose={() => setSelectedAssignment(null)}
+          assignment={selectedAssignment}
+          courseId={Number(id)}
+          onSubmitSuccess={() => {
+            // Refresh assignments after submission
+            fetchCourseContent();
+            setSelectedAssignment(null);
+          }}
+        />
+      )}
     </Layout>
   );
 }

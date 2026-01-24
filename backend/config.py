@@ -10,3 +10,6 @@ class Config:
     MOODLE_TOKEN = os.getenv("MOODLE_TOKEN")
     DEBUG = os.getenv("FLASK_ENV") == "development"
     PORT = int(os.getenv("PORT", 5000))
+    
+    # Backend URL for generating absolute file proxy links
+    BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:5000")
