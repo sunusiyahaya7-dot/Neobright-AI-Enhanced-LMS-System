@@ -3,7 +3,9 @@ import { Link, useLocation, useParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import ModuleDetailsModal from '../components/ModuleDetailsModal';
 import AssignmentDetailsModal from '../components/AssignmentDetailsModal';
+import { ProgressBar } from '../components/ProgressBar';
 import { getCourseContents, getCourseAssignments } from '../services/moodleService';
+import { progressService, CourseProgress } from '../services/progressService';
 import {
   ChevronDown,
   ChevronRight,
@@ -11,6 +13,7 @@ import {
   Loader2,
   Sparkles,
   Download,
+  TrendingUp,
 } from 'lucide-react';
 
 interface CourseSummary {
@@ -74,6 +77,8 @@ export default function CourseContent() {
   const [processedMap, setProcessedMap] = useState<Record<string, ProcessedModule>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [progress, setProgress] = useState<CourseProgress | null>(null);
+  const [progressLoading, setProgressLoading] = useState(false);
 
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
   const [selectedModule, setSelectedModule] = useState<{ module: CourseModule; sectionName?: string } | null>(null);
@@ -113,11 +118,27 @@ export default function CourseContent() {
       if (first) {
         setOpenSections({ [String(first.section_id ?? 0)]: true });
       }
+
+      // Fetch progress
+      fetchCourseProgress();
     } catch (err: any) {
       console.error('Failed to fetch course content:', err);
       setError(err.response?.data?.error || 'Failed to load course content');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchCourseProgress = async () => {
+    try {
+      setProgressLoading(true);
+      const progressData = await progressService.getCourseProgress(Number(id));
+      setProgress(progressData);
+    } catch (err) {
+      console.error('Failed to fetch course progress:', err);
+      // Don't show error to user, just leave progress empty
+    } finally {
+      setProgressLoading(false);
     }
   };
 
@@ -164,14 +185,29 @@ export default function CourseContent() {
                 </p>
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex flex-col items-end gap-4 min-w-fit">
                 <button className="px-4 py-2 rounded-xl bg-gray-100 dark:bg-[#111418] text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-[#1A1C20] transition-colors">
                   Focus Mode
                 </button>
-                <div className="text-right">
-                  <p className="text-xs text-gray-600 dark:text-gray-400">Progress</p>
-                  <p className="text-lg font-bold text-[#1ABC9C]">—</p>
-                </div>
+                {progressLoading ? (
+                  <div className="flex items-center gap-2">
+                    <div className="w-16 h-2 bg-gray-200 dark:bg-gray-700 rounded-full animate-pulse"></div>
+                  </div>
+                ) : progress ? (
+                  <div className="text-right">
+                    <div className="flex items-center gap-2 mb-1">
+                      <TrendingUp size={16} className="text-[#1ABC9C]" />
+                      <p className="text-xs text-gray-600 dark:text-gray-400 font-semibold">Course Progress</p>
+                    </div>
+                    <p className="text-lg font-bold text-[#1ABC9C]">{progress.progress.toFixed(1)}%</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">{progress.completed}/{progress.total} completed</p>
+                  </div>
+                ) : (
+                  <div className="text-right">
+                    <p className="text-xs text-gray-600 dark:text-gray-400">Progress</p>
+                    <p className="text-lg font-bold text-gray-300 dark:text-gray-600">—</p>
+                  </div>
+                )}
               </div>
             </div>
           </div>
