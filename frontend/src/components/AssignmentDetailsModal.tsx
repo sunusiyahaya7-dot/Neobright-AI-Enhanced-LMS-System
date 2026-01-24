@@ -90,6 +90,12 @@ export default function AssignmentDetailsModal({ isOpen, onClose, assignment, co
     return `${(kb / 1024).toFixed(1)} MB`;
   };
 
+  const decodeHtml = (html: string) => {
+    const txt = document.createElement('textarea');
+    txt.innerHTML = html;
+    return txt.value;
+  };
+
   const formatDate = (timestamp?: number) => {
     if (!timestamp) return 'No date';
     return new Date(timestamp * 1000).toLocaleDateString('en-US', {
@@ -247,7 +253,7 @@ export default function AssignmentDetailsModal({ isOpen, onClose, assignment, co
                           Graded
                         </p>
                         <p className="text-sm font-semibold text-green-700 dark:text-green-300 mt-2">
-                          Grade: {submissionDetails.feedback.gradefordisplay}
+                          Grade: {decodeHtml(submissionDetails.feedback.gradefordisplay)}
                         </p>
                         {submissionDetails.feedback.gradeddate && (
                           <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
@@ -280,7 +286,7 @@ export default function AssignmentDetailsModal({ isOpen, onClose, assignment, co
                   <div>
                     <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Description</h3>
                     <div className="text-gray-700 dark:text-gray-300 prose prose-sm dark:prose-invert max-w-none bg-gray-50 dark:bg-[#111418] rounded-xl p-4">
-                      {assignment.description.replace(/<[^>]*>/g, '')}
+                      {decodeHtml(assignment.description).replace(/<[^>]*>/g, '')}
                     </div>
                   </div>
                 ) : null}
@@ -334,28 +340,33 @@ export default function AssignmentDetailsModal({ isOpen, onClose, assignment, co
                       Teacher Feedback
                     </h3>
                     
-                    {/* Feedback Plugins (comments, rubric, etc.) */}
+                    {/* Feedback from plugins */}
                     {submissionDetails.feedback.plugins && submissionDetails.feedback.plugins.length > 0 ? (
                       <div className="space-y-3">
-                        {submissionDetails.feedback.plugins.map((plugin, idx) => (
-                          <div
-                            key={idx}
-                            className="bg-blue-50 dark:bg-blue-900/20 rounded-xl p-4 border border-blue-200 dark:border-blue-800/30"
-                          >
-                            {plugin.name && (
-                              <p className="text-xs font-semibold text-blue-600 dark:text-blue-400 mb-2">
-                                {plugin.name}
-                              </p>
-                            )}
-                            {plugin.output ? (
-                              <div className="text-sm text-gray-700 dark:text-gray-300 prose prose-sm dark:prose-invert max-w-none">
-                                {plugin.output}
-                              </div>
-                            ) : (
-                              <p className="text-sm text-gray-600 dark:text-gray-400">No feedback provided</p>
-                            )}
-                          </div>
-                        ))}
+                        {submissionDetails.feedback.plugins.map((plugin, idx) => {
+                          // Extract feedback text from editorfields
+                          const feedbackText = plugin.editorfields?.[0]?.text;
+                          
+                          return (
+                            <div
+                              key={idx}
+                              className="bg-blue-50 dark:bg-blue-900/20 rounded-xl p-4 border border-blue-200 dark:border-blue-800/30"
+                            >
+                              {plugin.name && (
+                                <p className="text-xs font-semibold text-blue-600 dark:text-blue-400 mb-2">
+                                  {plugin.name}
+                                </p>
+                              )}
+                              {feedbackText ? (
+                                <div className="text-sm text-gray-700 dark:text-gray-300 prose prose-sm dark:prose-invert max-w-none">
+                                  {feedbackText.replace(/<[^>]*>/g, '')}
+                                </div>
+                              ) : (
+                                <p className="text-sm text-gray-600 dark:text-gray-400">No feedback provided</p>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     ) : (
                       <p className="text-sm text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-[#111418] rounded-xl p-4">
