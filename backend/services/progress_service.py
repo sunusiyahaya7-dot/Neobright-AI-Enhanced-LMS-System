@@ -98,6 +98,89 @@ class ProgressService:
             }
     
     @staticmethod
+    def mark_activity_complete(firebase_uid: str, course_id: int, activity_id: int) -> bool:
+        """
+        Mark an activity as complete and update progress.
+        
+        Stores in Firestore:
+        completions/{firebase_uid}/courses/{course_id}/{activity_id}
+        """
+        try:
+            fs = FirestoreService()
+            
+            completion_doc = {
+                "activityId": activity_id,
+                "courseId": course_id,
+                "completedAt": datetime.utcnow(),
+                "isComplete": True
+            }
+            
+            # Store completion
+            fs.db.collection("completions").document(firebase_uid).collection(
+                "courses"
+            ).document(str(course_id)).collection("activities").document(
+                str(activity_id)
+            ).set(completion_doc, merge=True)
+            
+            print(f"Marked activity {activity_id} as complete for user {firebase_uid}")
+            return True
+        
+        except Exception as e:
+            print(f"Error marking activity as complete: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    @staticmethod
+    def is_activity_complete(firebase_uid: str, course_id: int, activity_id: int) -> bool:
+        """
+        Check if an activity is marked as complete by the user.
+        """
+        try:
+            fs = FirestoreService()
+            
+            doc = fs.db.collection("completions").document(firebase_uid).collection(
+                "courses"
+            ).document(str(course_id)).collection("activities").document(
+                str(activity_id)
+            ).get()
+            
+            if doc.exists:
+                return doc.to_dict().get("isComplete", False)
+            
+            return False
+        
+        except Exception as e:
+            print(f"Error checking activity completion: {e}")
+            return False
+    
+    @staticmethod
+    def get_course_completions(firebase_uid: str, course_id: int) -> Dict[str, bool]:
+        """
+        Get all user-marked completions for a course.
+        
+        Returns dict: {activity_id: True/False}
+        """
+        try:
+            fs = FirestoreService()
+            
+            completions = {}
+            activities_ref = fs.db.collection("completions").document(firebase_uid).collection(
+                "courses"
+            ).document(str(course_id)).collection("activities")
+            
+            docs = activities_ref.stream()
+            for doc in docs:
+                data = doc.to_dict()
+                completions[doc.id] = data.get("isComplete", False)
+            
+            return completions
+        
+        except Exception as e:
+            print(f"Error getting course completions: {e}")
+            return {}
+    
+    @staticmethod
     def cache_course_progress(firebase_uid: str, course_id: int, progress_data: Dict) -> None:
         """
         Cache progress snapshot in Firestore.
