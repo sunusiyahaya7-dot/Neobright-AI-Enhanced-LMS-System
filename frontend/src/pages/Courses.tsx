@@ -114,14 +114,14 @@ export default function Courses() {
   const filters = [
     { id: 'all', label: 'All Courses', count: courses.length },
     { id: 'at-risk', label: 'At Risk', count: courses.filter(c => {
-      const progress = progressData[c.id]?.progress || generateCourseMetadata(c.id).progress;
+      const progress = progressData[c.id]?.progress ?? generateCourseMetadata(c.id).progress;
       return progress < 35;
     }).length },
   ];
 
   const filteredCourses = courses.filter((course) => {
     if (selectedFilter !== 'all') {
-      const progress = progressData[course.id]?.progress || generateCourseMetadata(course.id).progress;
+      const progress = progressData[course.id]?.progress ?? generateCourseMetadata(course.id).progress;
       if (selectedFilter === 'at-risk' && progress >= 35) return false;
     }
     return (
@@ -133,7 +133,7 @@ export default function Courses() {
   const avgProgress = courses.length > 0
     ? Math.round(
         courses.reduce((sum, c) => {
-          const progress = progressData[c.id]?.progress || generateCourseMetadata(c.id).progress;
+          const progress = progressData[c.id]?.progress ?? generateCourseMetadata(c.id).progress;
           return sum + progress;
         }, 0) / courses.length
       )
@@ -225,7 +225,7 @@ export default function Courses() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {filteredCourses.map((course, index) => {
                     const realProgress = progressData[course.id];
-                    const displayProgress = realProgress?.progress || generateCourseMetadata(course.id).progress;
+                    const displayProgress = realProgress?.progress ?? generateCourseMetadata(course.id).progress;
                     const progressColor = getCourseColor(displayProgress);
                     const isAtRisk = displayProgress < 35;
                     return (

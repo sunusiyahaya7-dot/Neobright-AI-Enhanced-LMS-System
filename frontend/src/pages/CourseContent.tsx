@@ -4,6 +4,7 @@ import Layout from '../components/Layout';
 import ModuleDetailsModal from '../components/ModuleDetailsModal';
 import AssignmentDetailsModal from '../components/AssignmentDetailsModal';
 import { ProgressBar } from '../components/ProgressBar';
+import { MarkAsDoneButton } from '../components/MarkAsDoneButton';
 import { getCourseContents, getCourseAssignments } from '../services/moodleService';
 import { progressService, CourseProgress } from '../services/progressService';
 import {
@@ -79,6 +80,7 @@ export default function CourseContent() {
   const [error, setError] = useState('');
   const [progress, setProgress] = useState<CourseProgress | null>(null);
   const [progressLoading, setProgressLoading] = useState(false);
+  const [completions, setCompletions] = useState<Record<string, boolean>>({});
 
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
   const [selectedModule, setSelectedModule] = useState<{ module: CourseModule; sectionName?: string } | null>(null);
@@ -121,6 +123,9 @@ export default function CourseContent() {
 
       // Fetch progress
       fetchCourseProgress();
+      
+      // Fetch activity completions
+      fetchCompletions();
     } catch (err: any) {
       console.error('Failed to fetch course content:', err);
       setError(err.response?.data?.error || 'Failed to load course content');
@@ -142,6 +147,33 @@ export default function CourseContent() {
     }
   };
 
+  const fetchCompletions = async () => {
+    try {
+      const completionsData = await progressService.getCourseCompletions(Number(id));
+      setCompletions(completionsData);
+    } catch (err) {
+      console.error('Failed to fetch completions:', err);
+      // Continue without completions data
+    }
+  };
+
+  const handleActivityComplete = async (activityId: number) => {
+    try {
+      const success = await progressService.markActivityComplete(Number(id), activityId);
+      if (success) {
+        // Update completions state
+        setCompletions(prev => ({
+          ...prev,
+          [String(activityId)]: true
+        }));
+        // Refresh backend-computed progress (includes Moodle + user completions)
+        fetchCourseProgress();
+      }
+    } catch (err) {
+      console.error('Failed to mark activity as complete:', err);
+    }
+  };
+
   const courseTitle = routedCourse?.fullname || `Course ${id}`;
   const courseCode = routedCourse?.shortname || '';
 
@@ -158,6 +190,19 @@ export default function CourseContent() {
   const totalFiles = useMemo(() => {
     return allModules.reduce((sum, m) => sum + (m.files?.length || 0), 0);
   }, [allModules]);
+
+  // Calculate activities done count (including both modules and assignments)
+  const activitiesDone = useMemo(() => {
+    const modulesDone = allModules.filter(m => completions[String(m.id)]).length;
+    const assignmentsDone = assignments.filter(a => 
+      completions[String(a.module_id || a.id)] || a.status === 'submitted'
+    ).length;
+    return modulesDone + assignmentsDone;
+  }, [completions, allModules, assignments]);
+
+  const totalActivities = useMemo(() => {
+    return allModules.length + assignments.length;
+  }, [allModules, assignments]);
 
   const toggleSection = (sectionId: string) => {
     setOpenSections((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }));
@@ -189,7 +234,7 @@ export default function CourseContent() {
                 <button className="px-4 py-2 rounded-xl bg-gray-100 dark:bg-[#111418] text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-[#1A1C20] transition-colors">
                   Focus Mode
                 </button>
-                {progressLoading ? (
+                {progressLoading && !progress ? (
                   <div className="flex items-center gap-2">
                     <div className="w-16 h-2 bg-gray-200 dark:bg-gray-700 rounded-full animate-pulse"></div>
                   </div>
@@ -201,6 +246,7 @@ export default function CourseContent() {
                     </div>
                     <p className="text-lg font-bold text-[#1ABC9C]">{progress.progress.toFixed(1)}%</p>
                     <p className="text-xs text-gray-500 dark:text-gray-400">{progress.completed}/{progress.total} completed</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Activities: {activitiesDone}/{totalActivities}</p>
                   </div>
                 ) : (
                   <div className="text-right">
@@ -282,9 +328,20 @@ export default function CourseContent() {
                                   {assignment.section_name}
                                 </p>
                               </div>
-                              <span className="px-3 py-1 bg-[#1E5BF0]/10 text-[#1E5BF0] dark:bg-[#1E5BF0]/20 dark:text-[#4A9FFF] text-xs font-semibold rounded-lg">
-                                {assignment.status || 'Not submitted'}
-                              </span>
+                              <div className="flex items-center gap-3 flex-shrink-0">
+                                <span className="px-3 py-1 bg-[#1E5BF0]/10 text-[#1E5BF0] dark:bg-[#1E5BF0]/20 dark:text-[#4A9FFF] text-xs font-semibold rounded-lg">
+                                  {assignment.status || 'Not submitted'}
+                                </span>
+                                <div onClick={(e) => e.stopPropagation()}>
+                                  <MarkAsDoneButton
+                                    activityId={assignment.module_id || assignment.id}
+                                    courseId={Number(id)}
+                                    isComplete={completions[String(assignment.module_id || assignment.id)] || assignment.status === 'submitted'}
+                                    onComplete={handleActivityComplete}
+                                    size="sm"
+                                  />
+                                </div>
+                              </div>
                             </div>
                             {assignment.duedate && (
                               <p className="text-xs text-gray-600 dark:text-gray-400 mt-3">
@@ -375,6 +432,15 @@ export default function CourseContent() {
                                                 {mod.modname || 'resource'} • {(mod.files || []).length} files
                                                 {processed ? ' • 💡 AI-ready' : ''}
                                               </p>
+                                            </div>
+                                            <div onClick={(e) => e.stopPropagation()}>
+                                              <MarkAsDoneButton
+                                                activityId={mod.id}
+                                                courseId={Number(id)}
+                                                isComplete={completions[String(mod.id)] || false}
+                                                onComplete={handleActivityComplete}
+                                                size="sm"
+                                              />
                                             </div>
                                           </div>
 

@@ -46,7 +46,7 @@ class ProgressService:
         }
     
     @staticmethod
-    def fetch_and_compute_course_progress(course_id: int, moodle_user_id: int) -> Dict:
+    def fetch_and_compute_course_progress(course_id: int, moodle_user_id: int, firebase_uid: Optional[str] = None) -> Dict:
         """
         Fetch progress from Moodle and compute metrics.
         
@@ -70,14 +70,52 @@ class ProgressService:
             # Step 1: Fetch raw progress data from Moodle
             raw_data = MoodleService.get_course_progress(course_id, moodle_user_id)
             statuses = raw_data.get("statuses", [])
-            
-            # Step 2: Compute progress metrics
-            metrics = ProgressService.compute_progress(statuses)
-            
-            # Step 3: Enrich with metadata
+
+            # Normalize Moodle statuses into completion booleans
+            def status_is_complete(s: Dict) -> bool:
+                try:
+                    # Moodle 'state': 1 means complete
+                    if s.get("state") == 1:
+                        return True
+                    # Some modules expose detailed rules
+                    for d in s.get("details", []) or []:
+                        rv = d.get("rulevalue") or {}
+                        if isinstance(rv, dict) and rv.get("status") == 1:
+                            return True
+                    return False
+                except Exception:
+                    return False
+
+            total = len(statuses)
+            completed_ids = set()
+            cmid_set = set()
+            for s in statuses:
+                cmid = s.get("cmid")
+                if cmid is not None:
+                    cmid_set.add(str(cmid))
+                if status_is_complete(s) and cmid is not None:
+                    completed_ids.add(str(cmid))
+
+            # Overlay user-marked completions from Firestore (if available)
+            if firebase_uid:
+                try:
+                    user_completions = ProgressService.get_course_completions(firebase_uid, course_id)
+                    for aid, is_done in (user_completions or {}).items():
+                        if is_done and ((not cmid_set) or (str(aid) in cmid_set)):
+                            completed_ids.add(str(aid))
+                except Exception as _:
+                    # Ignore overlay errors; fallback to Moodle-only
+                    pass
+
+            completed = len(completed_ids)
+            progress_percent = round((completed / total) * 100, 2) if total > 0 else 0.0
+
+            # Step 3: Build result with combined metrics
             result = {
                 "courseId": course_id,
-                **metrics,
+                "progress": progress_percent,
+                "completedActivities": completed,
+                "totalActivities": total,
                 "lastFetched": int(datetime.utcnow().timestamp())
             }
             
@@ -96,6 +134,89 @@ class ProgressService:
                 "lastFetched": int(datetime.utcnow().timestamp()),
                 "error": str(e)
             }
+    
+    @staticmethod
+    def mark_activity_complete(firebase_uid: str, course_id: int, activity_id: int) -> bool:
+        """
+        Mark an activity as complete and update progress.
+        
+        Stores in Firestore:
+        completions/{firebase_uid}/courses/{course_id}/{activity_id}
+        """
+        try:
+            fs = FirestoreService()
+            
+            completion_doc = {
+                "activityId": activity_id,
+                "courseId": course_id,
+                "completedAt": datetime.utcnow(),
+                "isComplete": True
+            }
+            
+            # Store completion
+            fs.db.collection("completions").document(firebase_uid).collection(
+                "courses"
+            ).document(str(course_id)).collection("activities").document(
+                str(activity_id)
+            ).set(completion_doc, merge=True)
+            
+            print(f"Marked activity {activity_id} as complete for user {firebase_uid}")
+            return True
+        
+        except Exception as e:
+            print(f"Error marking activity as complete: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    @staticmethod
+    def is_activity_complete(firebase_uid: str, course_id: int, activity_id: int) -> bool:
+        """
+        Check if an activity is marked as complete by the user.
+        """
+        try:
+            fs = FirestoreService()
+            
+            doc = fs.db.collection("completions").document(firebase_uid).collection(
+                "courses"
+            ).document(str(course_id)).collection("activities").document(
+                str(activity_id)
+            ).get()
+            
+            if doc.exists:
+                return doc.to_dict().get("isComplete", False)
+            
+            return False
+        
+        except Exception as e:
+            print(f"Error checking activity completion: {e}")
+            return False
+    
+    @staticmethod
+    def get_course_completions(firebase_uid: str, course_id: int) -> Dict[str, bool]:
+        """
+        Get all user-marked completions for a course.
+        
+        Returns dict: {activity_id: True/False}
+        """
+        try:
+            fs = FirestoreService()
+            
+            completions = {}
+            activities_ref = fs.db.collection("completions").document(firebase_uid).collection(
+                "courses"
+            ).document(str(course_id)).collection("activities")
+            
+            docs = activities_ref.stream()
+            for doc in docs:
+                data = doc.to_dict()
+                completions[doc.id] = data.get("isComplete", False)
+            
+            return completions
+        
+        except Exception as e:
+            print(f"Error getting course completions: {e}")
+            return {}
     
     @staticmethod
     def cache_course_progress(firebase_uid: str, course_id: int, progress_data: Dict) -> None:
