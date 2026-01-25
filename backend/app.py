@@ -7,6 +7,7 @@ from routes.pluginfile import pluginfile_bp
 from routes.enrollment_routes import enrollment_bp
 from routes.materials_routes import materials_bp
 from routes.progress_routes import progress_bp
+from routes.analytics_routes import analytics_bp
 import firebase_admin
 from firebase_admin import credentials
 import os
@@ -39,6 +40,7 @@ def create_app():
     app.register_blueprint(pluginfile_bp)
     app.register_blueprint(enrollment_bp)
     app.register_blueprint(progress_bp)
+    app.register_blueprint(analytics_bp)
 
     # Simple health check route
     @app.route("/health", methods=["GET"])

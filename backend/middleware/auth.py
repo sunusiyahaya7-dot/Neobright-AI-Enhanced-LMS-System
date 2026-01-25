@@ -1,13 +1,12 @@
 """Firebase authentication middleware for Flask."""
 
 from functools import wraps
-from flask import request, jsonify
+from flask import request, jsonify, g
+import os
 import firebase_admin
-from firebase_admin import credentials, auth
+from firebase_admin import auth
 
-# Initialize Firebase Admin SDK
-cred = credentials.Certificate("serviceAccountKey.json")  # Download from Firebase Console
-firebase_admin.initialize_app(cred)
+# Firebase Admin SDK is initialized in app.py - no need to initialize here
 
 def verify_firebase_token(f):
     """Decorator to verify Firebase ID token from Authorization header."""
