@@ -95,6 +95,9 @@ class AnalyticsService:
             # In production, you'd track actual enrollment date
             now = datetime.utcnow()
             if isinstance(last_synced, datetime):
+                # Ensure both datetimes are naive (no timezone)
+                if last_synced.tzinfo is not None:
+                    last_synced = last_synced.replace(tzinfo=None)
                 time_diff = now - last_synced
             else:
                 # Assume at least 1 week of activity
@@ -141,7 +144,12 @@ class AnalyticsService:
             
             if last_activity:
                 if isinstance(last_activity, datetime):
-                    inactive_days = (now - last_activity).days
+                    # Ensure both datetimes are naive (no timezone)
+                    if last_activity.tzinfo is not None:
+                        last_activity_naive = last_activity.replace(tzinfo=None)
+                    else:
+                        last_activity_naive = last_activity
+                    inactive_days = (now - last_activity_naive).days
                 else:
                     inactive_days = 0
             else:
@@ -153,6 +161,9 @@ class AnalyticsService:
                 if progress_doc.exists:
                     last_synced = progress_doc.to_dict().get("lastSynced")
                     if isinstance(last_synced, datetime):
+                        # Ensure both datetimes are naive (no timezone)
+                        if last_synced.tzinfo is not None:
+                            last_synced = last_synced.replace(tzinfo=None)
                         inactive_days = (now - last_synced).days
                     else:
                         inactive_days = 7  # Default assumption

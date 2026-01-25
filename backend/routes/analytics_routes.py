@@ -9,10 +9,10 @@ from services.moodle_service import MoodleService
 from services.firestore_service import FirestoreService
 
 
-analytics_bp = Blueprint('analytics', __name__)
+analytics_bp = Blueprint('analytics', __name__, url_prefix='/api')
 
 
-@analytics_bp.route('/api/analytics/overview', methods=['GET'])
+@analytics_bp.route('/analytics/overview', methods=['GET'])
 @firebase_required
 def get_analytics_overview():
     """
@@ -37,22 +37,20 @@ def get_analytics_overview():
     try:
         firebase_uid = g.firebase_uid
         
-        # Get user's Moodle credentials
+        # Get user's Moodle user ID
         fs = FirestoreService()
-        user_doc = fs.db.collection("users").document(firebase_uid).get()
+        user_doc = fs.get_user(firebase_uid)
         
-        if not user_doc.exists:
+        if not user_doc:
             return jsonify({"error": "User not found"}), 404
         
-        user_data = user_doc.to_dict()
-        moodle_token = user_data.get("moodleToken")
+        moodle_user_id = user_doc.get("moodle_user_id") or user_doc.get("moodleUserId")
         
-        if not moodle_token:
-            return jsonify({"error": "Moodle token not found"}), 401
+        if not moodle_user_id:
+            return jsonify({"error": "Moodle account not linked"}), 400
         
         # Get enrolled courses
-        moodle = MoodleService(moodle_token)
-        courses = moodle.get_enrolled_courses()
+        courses = MoodleService.get_user_courses(int(moodle_user_id))
         
         if not courses:
             return jsonify({
@@ -76,7 +74,7 @@ def get_analytics_overview():
         return jsonify({"error": str(e)}), 500
 
 
-@analytics_bp.route('/api/analytics/course/<int:course_id>', methods=['GET'])
+@analytics_bp.route('/analytics/course/<int:course_id>', methods=['GET'])
 @firebase_required
 def get_course_analytics(course_id):
     """
@@ -114,7 +112,7 @@ def get_course_analytics(course_id):
         return jsonify({"error": str(e)}), 500
 
 
-@analytics_bp.route('/api/analytics/risk/<int:course_id>', methods=['GET'])
+@analytics_bp.route('/analytics/risk/<int:course_id>', methods=['GET'])
 @firebase_required
 def get_risk_level(course_id):
     """
