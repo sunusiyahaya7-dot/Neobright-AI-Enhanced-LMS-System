@@ -2,14 +2,16 @@ import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { getUserProfile, UserProfile } from '../services/userService';
-import { getCourses } from '../services/moodleService';
+import { getCourses, getCourseAssignments } from '../services/moodleService';
+import { progressService, ProgressOverview } from '../services/progressService';
 import Layout from '../components/Layout';
 import { 
   BookOpen, 
-  Clock,
+  AlertCircle,
   Award,
   Brain,
   TrendingUp,
+  TrendingDown,
   Zap,
   Calendar
 } from 'lucide-react';
@@ -20,11 +22,25 @@ interface Course {
   shortname: string;
 }
 
+interface CourseAssignment {
+  id: number;
+  module_id: number;
+  assignment_id?: number;
+  name?: string;
+  status?: string;
+  grade?: number;
+  gradeMax?: number;
+  duedate?: number;
+}
+
 export default function Dashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [courses, setCourses] = useState<Course[]>([]);
+  const [progressData, setProgressData] = useState<ProgressOverview[]>([]);
+  const [averageGrade, setAverageGrade] = useState<number>(0);
+  const [assignmentStats, setAssignmentStats] = useState<{ dueCount: number; doneCount: number; totalCount: number; nextDue?: number }>({ dueCount: 0, doneCount: 0, totalCount: 0 });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -43,7 +59,42 @@ export default function Dashboard() {
       // Load enrolled courses from Moodle via backend API
       try {
         const coursesData = await getCourses();
-        setCourses(coursesData.courses || []);
+        const courseList = coursesData.courses || [];
+        setCourses(courseList);
+
+        // Load progress overview
+        const progressOverview = await progressService.getProgressOverview();
+        setProgressData(progressOverview);
+
+        // Fetch all assignments concurrently for better UX
+        const assignmentsResponses = await Promise.all(
+          courseList.map((course) =>
+            getCourseAssignments(course.id).catch((err) => {
+              console.error(`Failed to fetch assignments for course ${course.id}:`, err);
+              return { assignments: [] } as { assignments: CourseAssignment[] };
+            })
+          )
+        );
+
+        const allAssignments: CourseAssignment[] = assignmentsResponses.flatMap((res) => res.assignments || []);
+
+        // Calculate average grade from submitted assignments
+        const gradedAssignments = allAssignments.filter((a) => a.grade !== undefined && a.grade !== null);
+        if (gradedAssignments.length > 0) {
+          const avgGrade = gradedAssignments.reduce((sum, a) => sum + (a.grade || 0), 0) / gradedAssignments.length;
+          setAverageGrade(Math.round(avgGrade));
+        } else {
+          setAverageGrade(0);
+        }
+
+        // Compute assignment due and done stats
+        const nowSec = Math.floor(Date.now() / 1000);
+        const pending = allAssignments.filter((a) => (a.status || '').toLowerCase() !== 'submitted');
+        const doneCount = allAssignments.filter((a) => (a.status || '').toLowerCase() === 'submitted').length;
+        const dueWithDates = pending.filter((a) => typeof a.duedate === 'number');
+        const nextDue = dueWithDates.sort((a, b) => (a.duedate || 0) - (b.duedate || 0))[0]?.duedate;
+        const dueCount = pending.length; // includes overdue and upcoming
+        setAssignmentStats({ dueCount, doneCount, totalCount: allAssignments.length, nextDue });
       } catch (err) {
         console.error('Failed to load courses:', err);
       }
@@ -84,26 +135,56 @@ export default function Dashboard() {
 
               <div className="bg-gray-50 dark:bg-[#1A1C20] rounded-lg p-4 border border-gray-200 dark:border-[#2A2D32]">
                 <div className="flex items-center gap-3 mb-2">
-                  <Clock size={24} className="text-blue-600" />
-                  <span className="text-2xl font-bold text-gray-900 dark:text-white">3</span>
+                  <AlertCircle size={24} className={assignmentStats.dueCount > 0 ? 'text-red-600' : 'text-green-600'} />
+                  <span className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {assignmentStats.dueCount > 0 
+                      ? assignmentStats.dueCount 
+                      : `${assignmentStats.doneCount}/${assignmentStats.totalCount}`}
+                  </span>
                 </div>
-                <p className="text-sm text-gray-600 dark:text-gray-400">Assignments Due</p>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  {assignmentStats.dueCount > 0 ? 'Assignments Due' : 'Assignments Completed'}
+                </p>
+                {assignmentStats.dueCount > 0 && assignmentStats.nextDue && (
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Next due: {new Date((assignmentStats.nextDue || 0) * 1000).toLocaleDateString()}</p>
+                )}
+                <div className="mt-2">
+                  <Link
+                    to="/courses"
+                    className="text-xs font-semibold text-[#1E5BF0] hover:underline"
+                  >
+                    View due assignments
+                  </Link>
+                </div>
               </div>
 
               <div className="bg-gray-50 dark:bg-[#1A1C20] rounded-lg p-4 border border-gray-200 dark:border-[#2A2D32]">
                 <div className="flex items-center gap-3 mb-2">
                   <Award size={24} className="text-purple-600" />
-                  <span className="text-2xl font-bold text-gray-900 dark:text-white">85%</span>
+                  <span className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {averageGrade}%
+                  </span>
                 </div>
                 <p className="text-sm text-gray-600 dark:text-gray-400">Quiz Average</p>
               </div>
 
               <div className="bg-gray-50 dark:bg-[#1A1C20] rounded-lg p-4 border border-gray-200 dark:border-[#2A2D32]">
                 <div className="flex items-center gap-3 mb-2">
-                  <TrendingUp size={24} className="text-green-600" />
-                  <span className="text-2xl font-bold text-gray-900 dark:text-white">80%</span>
+                  {(() => {
+                    const avgProgress = progressData.length > 0 
+                      ? Math.round(progressData.reduce((sum, p) => sum + p.progress, 0) / progressData.length)
+                      : 0;
+                    return avgProgress < 50 
+                      ? <TrendingDown size={24} className="text-red-600" />
+                      : <TrendingUp size={24} className="text-green-600" />;
+                  })()}
+                  <span className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {progressData.length > 0 
+                      ? Math.round(progressData.reduce((sum, p) => sum + p.progress, 0) / progressData.length)
+                      : 0}%
+                  </span>
                 </div>
-                <p className="text-sm text-gray-600 dark:text-gray-400">Progress</p>
+                <p className="text-sm text-gray-600 dark:text-gray-400">Average Progress</p>
               </div>
             </div>
           </div>
