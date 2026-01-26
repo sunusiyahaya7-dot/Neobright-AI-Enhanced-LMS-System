@@ -5,6 +5,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Courses from './pages/Courses';
 import CourseContent from './pages/CourseContent';
+import Analytics from './pages/Analytics';
 import ProtectedRoute from './auth/ProtectedRoute';
 import './index.css';
 
@@ -38,6 +39,15 @@ function App() {
             element={
               <ProtectedRoute>
                 <CourseContent />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/analytics"
+            element={
+              <ProtectedRoute>
+                <Analytics />
               </ProtectedRoute>
             }
           />
