@@ -1,20 +1,35 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { analyticsService, AnalyticsOverview, CourseAnalytics } from '../services/analyticsService';
-import { getCourses } from '../services/moodleService';
+import { getCourses, getCourseAssignments } from '../services/moodleService';
+import { progressService } from '../services/progressService';
 import Layout from '../components/Layout';
 import { 
   TrendingUp, 
-  TrendingDown, 
-  Activity, 
-  AlertTriangle,
-  CheckCircle,
+  Award,
   Clock,
-  BarChart3,
-  Zap
+  Target,
+  Zap,
+  Sparkles,
+  ArrowLeft
 } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { Link } from 'react-router-dom';
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  PieChart,
+  Pie,
+  Cell,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Legend,
+} from 'recharts';
 
 interface Course {
   id: number;
@@ -22,12 +37,20 @@ interface Course {
   shortname: string;
 }
 
+interface AssignmentStats {
+  completed: number;
+  pending: number;
+  overdue: number;
+  total: number;
+}
+
 export default function Analytics() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [analytics, setAnalytics] = useState<AnalyticsOverview | null>(null);
   const [courses, setCourses] = useState<Course[]>([]);
-  const [selectedCourse, setSelectedCourse] = useState<number | null>(null);
+  const [assignmentStats, setAssignmentStats] = useState<AssignmentStats>({ completed: 0, pending: 0, overdue: 0, total: 0 });
+  const [progressData, setProgressData] = useState<any[]>([]);
 
   useEffect(() => {
     loadAnalytics();
@@ -36,16 +59,34 @@ export default function Analytics() {
   const loadAnalytics = async () => {
     try {
       setLoading(true);
-      const [analyticsData, coursesResponse] = await Promise.all([
+      const [analyticsData, coursesResponse, progressOverview] = await Promise.all([
         analyticsService.getAnalyticsOverview(),
-        getCourses()
+        getCourses(),
+        progressService.getProgressOverview()
       ]);
+      
       setAnalytics(analyticsData);
       const courseList = coursesResponse?.courses || [];
       setCourses(courseList);
-      if (courseList.length > 0 && !selectedCourse) {
-        setSelectedCourse(courseList[0].id);
-      }
+      setProgressData(progressOverview);
+
+      const assignmentPromises = courseList.map((course: Course) => 
+        getCourseAssignments(course.id).catch(() => [])
+      );
+      const assignmentsResponses = await Promise.all(assignmentPromises);
+      const allAssignments = assignmentsResponses.flat();
+      
+      const now = Date.now() / 1000;
+      const completed = allAssignments.filter((a: any) => a.status === 'submitted').length;
+      const overdue = allAssignments.filter((a: any) => a.duedate && a.duedate < now && a.status !== 'submitted').length;
+      const pending = allAssignments.length - completed - overdue;
+      
+      setAssignmentStats({
+        completed,
+        pending,
+        overdue,
+        total: allAssignments.length
+      });
     } catch (error) {
       console.error('Failed to load analytics:', error);
     } finally {
@@ -53,27 +94,39 @@ export default function Analytics() {
     }
   };
 
-  const getCourseName = (courseId: number) => {
-    return courses.find(c => c.id === courseId)?.fullname || `Course ${courseId}`;
-  };
+  const avgProgress = progressData.length > 0 
+    ? Math.round(progressData.reduce((sum, p) => sum + p.progress, 0) / progressData.length)
+    : 0;
 
-  const getRiskColor = (riskLevel: 'low' | 'medium' | 'high') => {
-    switch (riskLevel) {
-      case 'high': return 'text-red-600 bg-red-100 dark:bg-red-900/30';
-      case 'medium': return 'text-yellow-600 bg-yellow-100 dark:bg-yellow-900/30';
-      case 'low': return 'text-green-600 bg-green-100 dark:bg-green-900/30';
+  const completionRate = assignmentStats.total > 0
+    ? Math.round((assignmentStats.completed / assignmentStats.total) * 100)
+    : 0;
+
+  const weeklyStreak = analytics?.courses.filter(c => c.engagement.inactiveDays <= 2).length || 0;
+
+  const getRecommendations = () => {
+    const recs: string[] = [];
+    const atRiskCourses = analytics?.courses.filter(c => c.riskLevel === 'high' || c.riskLevel === 'medium') || [];
+    
+    if (atRiskCourses.length > 0) {
+      const worstCourse = courses.find(c => c.id === atRiskCourses[0]?.courseId);
+      if (worstCourse) {
+        recs.push(`Focus on ${worstCourse.shortname} - it's your lowest performing course`);
+      }
     }
-  };
-
-  const getEngagementColor = (level: 'low' | 'medium' | 'high') => {
-    switch (level) {
-      case 'high': return 'text-green-600';
-      case 'medium': return 'text-yellow-600';
-      case 'low': return 'text-red-600';
+    
+    if (avgProgress < 60) {
+      recs.push('Schedule 20-minute daily recap sessions for better retention');
     }
+    
+    if (assignmentStats.overdue > 0) {
+      recs.push(`Complete ${assignmentStats.overdue} overdue assignment${assignmentStats.overdue > 1 ? 's' : ''} as soon as possible`);
+    } else if (assignmentStats.pending > 0) {
+      recs.push('Stay ahead by completing upcoming assignments early');
+    }
+    
+    return recs.length > 0 ? recs : ['Great work! Keep maintaining your current study pace'];
   };
-
-  const selectedCourseAnalytics = analytics?.courses.find(c => c.courseId === selectedCourse);
 
   if (loading) {
     return (
@@ -91,228 +144,174 @@ export default function Analytics() {
   return (
     <Layout>
       <div className="min-h-screen bg-gray-50 dark:bg-[#0F1115]">
-        {/* Header */}
         <div className="bg-white dark:bg-[#1A1C20] border-b border-gray-200 dark:border-[#2A2D32]">
-          <div className="p-8">
+          <div className="p-6">
             <div className="max-w-7xl mx-auto">
-              <div className="flex items-center gap-3 mb-2">
-                <BarChart3 className="text-[#1E5BF0]" size={32} />
-                <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Learning Analytics</h1>
-              </div>
-              <p className="text-gray-600 dark:text-gray-400">Track your progress and identify areas for improvement</p>
+              <Link to="/dashboard" className="inline-flex items-center gap-2 text-gray-600 dark:text-gray-400 hover:text-[#1E5BF0] dark:hover:text-[#2C7CF0] mb-4 transition-colors">
+                <ArrowLeft size={20} />
+                <span>Back to Dashboard</span>
+              </Link>
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Progress Insights</h1>
+              <p className="text-gray-600 dark:text-gray-400">Your learning analytics and performance overview</p>
             </div>
           </div>
         </div>
-
-        {/* Main Content */}
-        <div className="p-8">
-          <div className="max-w-7xl mx-auto space-y-8">
-            {/* Overview Stats */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {/* Overall Risk */}
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.1 }}
-                className="bg-white dark:bg-[#1A1C20] rounded-lg p-6 border border-gray-200 dark:border-[#2A2D32]"
-              >
-                <div className="flex items-center gap-3 mb-4">
-                  {analytics?.overallRisk === 'high' ? (
-                    <AlertTriangle className="text-red-600" size={24} />
-                  ) : analytics?.overallRisk === 'medium' ? (
-                    <Clock className="text-yellow-600" size={24} />
-                  ) : (
-                    <CheckCircle className="text-green-600" size={24} />
-                  )}
-                  <h3 className="font-semibold text-gray-900 dark:text-white">Overall Risk</h3>
+        <div className="p-6">
+          <div className="max-w-7xl mx-auto space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
+              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-white dark:bg-[#1A1C20] rounded-xl p-5 border border-gray-200 dark:border-[#2A2D32]">
+                <div className="w-full h-10 bg-[#CFF7EB] dark:bg-teal-900/30 rounded-full relative flex items-center justify-center">
+                  <div className="w-8 h-8 bg-white/80 dark:bg-white/10 rounded-full flex items-center justify-center shadow-sm">
+                    <Award className="text-teal-600" size={18} />
+                  </div>
+                  <div className="absolute right-3 flex items-center gap-1 text-teal-600 text-sm font-semibold">
+                    <TrendingUp size={16} /><span>+5%</span>
+                  </div>
                 </div>
-                <div className={`inline-block px-4 py-2 rounded-full ${getRiskColor(analytics?.overallRisk || 'low')}`}>
-                  <span className="font-bold uppercase text-sm">{analytics?.overallRisk || 'Low'}</span>
+                <div className="mt-4 flex items-end justify-between">
+                  <div>
+                    <div className="text-2xl font-bold text-gray-900 dark:text-white leading-tight">{avgProgress}%</div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">Average Score</p>
+                  </div>
                 </div>
               </motion.div>
-
-              {/* Average Velocity */}
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.2 }}
-                className="bg-white dark:bg-[#1A1C20] rounded-lg p-6 border border-gray-200 dark:border-[#2A2D32]"
-              >
-                <div className="flex items-center gap-3 mb-4">
-                  <Activity className="text-[#1E5BF0]" size={24} />
-                  <h3 className="font-semibold text-gray-900 dark:text-white">Avg Completion Rate</h3>
+              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="bg-white dark:bg-[#1A1C20] rounded-xl p-5 border border-gray-200 dark:border-[#2A2D32]">
+                <div className="w-full h-10 bg-[#DDEBFF] dark:bg-blue-900/30 rounded-full relative flex items-center justify-center">
+                  <div className="w-8 h-8 bg-white/80 dark:bg-white/10 rounded-full flex items-center justify-center shadow-sm">
+                    <Clock className="text-blue-600" size={18} />
+                  </div>
+                  <div className="absolute right-3 flex items-center gap-1 text-teal-600 text-sm font-semibold">
+                    <TrendingUp size={16} /><span>+3h</span>
+                  </div>
                 </div>
-                <div className="text-3xl font-bold text-gray-900 dark:text-white">
-                  {analytics?.averageVelocity.toFixed(1) || '0.0'}
-                  <span className="text-lg text-gray-500 dark:text-gray-400 ml-1">activities/week</span>
+                <div className="mt-4 flex items-end justify-between">
+                  <div>
+                    <div className="text-2xl font-bold text-gray-900 dark:text-white leading-tight">{Math.max(24, weeklyStreak * 4)}h</div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">Study Hours</p>
+                  </div>
                 </div>
               </motion.div>
-
-              {/* Courses at Risk */}
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.3 }}
-                className="bg-white dark:bg-[#1A1C20] rounded-lg p-6 border border-gray-200 dark:border-[#2A2D32]"
-              >
-                <div className="flex items-center gap-3 mb-4">
-                  <Zap className="text-yellow-600" size={24} />
-                  <h3 className="font-semibold text-gray-900 dark:text-white">Needs Attention</h3>
+              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="bg-white dark:bg-[#1A1C20] rounded-xl p-5 border border-gray-200 dark:border-[#2A2D32]">
+                <div className="w-full h-10 bg-[#DDEBFF] dark:bg-blue-900/30 rounded-full relative flex items-center justify-center">
+                  <div className="w-8 h-8 bg-white/80 dark:bg-white/10 rounded-full flex items-center justify-center shadow-sm">
+                    <Target className="text-blue-600" size={18} />
+                  </div>
+                  <div className="absolute right-3 flex items-center gap-1 text-teal-600 text-sm font-semibold">
+                    <TrendingUp size={16} /><span>+12%</span>
+                  </div>
                 </div>
-                <div className="text-3xl font-bold text-gray-900 dark:text-white">
-                  {analytics?.totalCoursesAtRisk || 0}
-                  <span className="text-lg text-gray-500 dark:text-gray-400 ml-1">
-                    / {analytics?.courses.length || 0} courses
-                  </span>
+                <div className="mt-4 flex items-end justify-between">
+                  <div>
+                    <div className="text-2xl font-bold text-gray-900 dark:text-white leading-tight">{completionRate}%</div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">Completion Rate</p>
+                  </div>
+                </div>
+              </motion.div>
+              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="bg-white dark:bg-[#1A1C20] rounded-xl p-5 border border-gray-200 dark:border-[#2A2D32]">
+                <div className="w-full h-10 bg-[#FFEBD9] dark:bg-orange-900/30 rounded-full relative flex items-center justify-center">
+                  <div className="w-8 h-8 bg-white/80 dark:bg-white/10 rounded-full flex items-center justify-center shadow-sm">
+                    <Zap className="text-orange-600" size={18} />
+                  </div>
+                  <div className="absolute right-3 flex items-center gap-1 text-teal-600 text-sm font-semibold">
+                    <TrendingUp size={16} /><span>+2</span>
+                  </div>
+                </div>
+                <div className="mt-4 flex items-end justify-between">
+                  <div>
+                    <div className="text-2xl font-bold text-gray-900 dark:text-white leading-tight">{weeklyStreak}</div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">Weekly Streak</p>
+                  </div>
                 </div>
               </motion.div>
             </div>
-
-            {/* Course Selector */}
-            <div className="bg-white dark:bg-[#1A1C20] rounded-lg p-6 border border-gray-200 dark:border-[#2A2D32]">
-              <h3 className="font-semibold text-gray-900 dark:text-white mb-4">Select Course</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {courses.map(course => {
-                  const courseAnalytics = analytics?.courses.find(c => c.courseId === course.id);
-                  return (
-                    <button
-                      key={course.id}
-                      onClick={() => setSelectedCourse(course.id)}
-                      className={`p-4 rounded-lg border-2 text-left transition-all ${
-                        selectedCourse === course.id
-                          ? 'border-[#1E5BF0] bg-blue-50 dark:bg-blue-900/20'
-                          : 'border-gray-200 dark:border-[#2A2D32] hover:border-gray-300 dark:hover:border-[#3A3D42]'
-                      }`}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="bg-white dark:bg-[#1A1C20] rounded-xl p-6 border border-gray-200 dark:border-[#2A2D32]">
+                <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-6">Learning Progress by Week</h3>
+                <ResponsiveContainer width="100%" height={300}>
+                  <LineChart data={analytics?.courses[0]?.weeklyProgress || []}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                    <XAxis dataKey="week" />
+                    <YAxis />
+                    <Tooltip />
+                    <Line type="monotone" dataKey="progress" stroke="#0047AB" strokeWidth={2} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="bg-white dark:bg-[#1A1C20] rounded-xl p-6 border border-gray-200 dark:border-[#2A2D32]">
+                <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-6">Assignment Status</h3>
+                <ResponsiveContainer width="100%" height={300}>
+                  <PieChart>
+                    <Pie
+                      data={[
+                        { name: 'Completed', value: assignmentStats.completed },
+                        { name: 'Pending', value: assignmentStats.pending },
+                        { name: 'Overdue', value: assignmentStats.overdue }
+                      ]}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={90}
+                      paddingAngle={2}
+                      dataKey="value"
+                      fill="#1ABC9C"
                     >
-                      <h4 className="font-semibold text-gray-900 dark:text-white mb-1 truncate">{course.shortname}</h4>
-                      {courseAnalytics && (
-                        <div className="flex items-center gap-2 text-xs">
-                          <span className={`px-2 py-1 rounded ${getRiskColor(courseAnalytics.riskLevel)}`}>
-                            {courseAnalytics.riskLevel}
-                          </span>
-                          <span className="text-gray-600 dark:text-gray-400">
-                            {courseAnalytics.velocity.toFixed(1)}/wk
-                          </span>
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
+                      <Cell fill="#1ABC9C" />
+                      <Cell fill="#1E90FF" />
+                      <Cell fill="#FF6B6B" />
+                    </Pie>
+                    <Tooltip />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
               </div>
             </div>
-
-            {/* Course Analytics Details */}
-            {selectedCourseAnalytics && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Weekly Progress Chart */}
-                <motion.div
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  className="bg-white dark:bg-[#1A1C20] rounded-lg p-6 border border-gray-200 dark:border-[#2A2D32]"
-                >
-                  <div className="flex items-center gap-3 mb-6">
-                    <TrendingUp className="text-[#1E5BF0]" size={24} />
-                    <h3 className="font-semibold text-gray-900 dark:text-white">Weekly Progress Trend</h3>
+            <div className="bg-white dark:bg-[#1A1C20] rounded-xl p-6 border border-gray-200 dark:border-[#2A2D32]">
+              <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-6">Course Performance</h3>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={courses.map((course) => {
+                  const progressPercent = progressData.find(p => p.courseId === course.id)?.progress || 0;
+                  return {
+                    name: course.shortname,
+                    score: progressPercent
+                  };
+                })}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" />
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="score" fill="#0047AB" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="bg-gradient-to-r from-[#1E5BF0] to-[#2C7CF0] rounded-xl p-6 text-white">
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center flex-shrink-0">
+                    <Sparkles size={24} />
                   </div>
-                  
-                  {selectedCourseAnalytics.weeklyProgress.length > 0 ? (
-                    <div className="space-y-3">
-                      {selectedCourseAnalytics.weeklyProgress.map((week, index) => {
-                        const prevProgress = index > 0 ? selectedCourseAnalytics.weeklyProgress[index - 1].progress : week.progress;
-                        const trend = week.progress > prevProgress ? 'up' : week.progress < prevProgress ? 'down' : 'same';
-                        
-                        return (
-                          <div key={week.week} className="flex items-center gap-3">
-                            <span className="text-sm text-gray-600 dark:text-gray-400 w-24">{week.week}</span>
-                            <div className="flex-1 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                              <div
-                                className="bg-[#1E5BF0] h-2 rounded-full transition-all"
-                                style={{ width: `${week.progress}%` }}
-                              />
-                            </div>
-                            <span className="text-sm font-semibold text-gray-900 dark:text-white w-12 text-right">
-                              {week.progress.toFixed(0)}%
-                            </span>
-                            {trend === 'up' && <TrendingUp size={16} className="text-green-600" />}
-                            {trend === 'down' && <TrendingDown size={16} className="text-red-600" />}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <p className="text-gray-500 dark:text-gray-400">No progress data available</p>
-                  )}
-                </motion.div>
-
-                {/* Engagement & Velocity */}
-                <motion.div
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  className="space-y-6"
-                >
-                  {/* Velocity Card */}
-                  <div className="bg-white dark:bg-[#1A1C20] rounded-lg p-6 border border-gray-200 dark:border-[#2A2D32]">
-                    <div className="flex items-center gap-3 mb-4">
-                      <Activity className="text-[#1ABC9C]" size={24} />
-                      <h3 className="font-semibold text-gray-900 dark:text-white">Completion Velocity</h3>
-                    </div>
-                    <div className="text-4xl font-bold text-gray-900 dark:text-white mb-2">
-                      {selectedCourseAnalytics.velocity.toFixed(1)}
-                    </div>
-                    <p className="text-gray-600 dark:text-gray-400">activities per week</p>
+                  <div>
+                    <h3 className="text-xl font-bold mb-2">AI Learning Insight</h3>
+                    <p className="text-white/90 text-sm leading-relaxed">
+                      {avgProgress >= 75 
+                        ? "Excellent progress! You're maintaining strong performance across all courses. Consider challenging yourself with advanced topics."
+                        : avgProgress >= 50
+                        ? "Good momentum! Focus on completing pending assignments to maintain your upward trend. Your consistency is paying off."
+                        : "Your learning patterns show room for improvement. Try breaking study sessions into smaller chunks and reviewing material regularly."
+                      }
+                    </p>
                   </div>
-
-                  {/* Engagement Card */}
-                  <div className="bg-white dark:bg-[#1A1C20] rounded-lg p-6 border border-gray-200 dark:border-[#2A2D32]">
-                    <div className="flex items-center gap-3 mb-4">
-                      <Clock className={getEngagementColor(selectedCourseAnalytics.engagement.engagementLevel)} size={24} />
-                      <h3 className="font-semibold text-gray-900 dark:text-white">Engagement Level</h3>
-                    </div>
-                    <div className={`inline-block px-4 py-2 rounded-full mb-3 ${
-                      selectedCourseAnalytics.engagement.engagementLevel === 'high'
-                        ? 'bg-green-100 dark:bg-green-900/30 text-green-600'
-                        : selectedCourseAnalytics.engagement.engagementLevel === 'medium'
-                        ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600'
-                        : 'bg-red-100 dark:bg-red-900/30 text-red-600'
-                    }`}>
-                      <span className="font-bold uppercase text-sm">{selectedCourseAnalytics.engagement.engagementLevel}</span>
-                    </div>
-                    <div className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
-                      <p>Inactive for {selectedCourseAnalytics.engagement.inactiveDays} days</p>
-                      {selectedCourseAnalytics.engagement.lastActive && (
-                        <p>Last active: {new Date(selectedCourseAnalytics.engagement.lastActive).toLocaleDateString()}</p>
-                      )}
-                    </div>
-                  </div>
-                </motion.div>
+                </div>
               </div>
-            )}
-
-            {/* All Courses Summary */}
-            <div className="bg-white dark:bg-[#1A1C20] rounded-lg p-6 border border-gray-200 dark:border-[#2A2D32]">
-              <h3 className="font-semibold text-gray-900 dark:text-white mb-6">All Courses Overview</h3>
-              <div className="space-y-4">
-                {analytics?.courses.map(courseAnalytics => (
-                  <div
-                    key={courseAnalytics.courseId}
-                    className="flex items-center justify-between p-4 bg-gray-50 dark:bg-[#111418] rounded-lg"
-                  >
-                    <div className="flex-1">
-                      <h4 className="font-semibold text-gray-900 dark:text-white mb-1">
-                        {getCourseName(courseAnalytics.courseId)}
-                      </h4>
-                      <div className="flex items-center gap-4 text-sm text-gray-600 dark:text-gray-400">
-                        <span>Velocity: {courseAnalytics.velocity.toFixed(1)}/wk</span>
-                        <span className={getEngagementColor(courseAnalytics.engagement.engagementLevel)}>
-                          {courseAnalytics.engagement.engagementLevel} engagement
-                        </span>
-                      </div>
+              <div className="bg-white dark:bg-[#1A1C20] rounded-xl p-6 border border-gray-200 dark:border-[#2A2D32]">
+                <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-4">Recommendations</h3>
+                <div className="space-y-3">
+                  {getRecommendations().map((rec, index) => (
+                    <div key={index} className="flex items-start gap-3">
+                      <div className="w-2 h-2 bg-[#1E5BF0] rounded-full mt-2 flex-shrink-0"></div>
+                      <p className="text-sm text-gray-700 dark:text-gray-300">{rec}</p>
                     </div>
-                    <div className={`px-4 py-2 rounded-full ${getRiskColor(courseAnalytics.riskLevel)}`}>
-                      <span className="font-bold uppercase text-sm">{courseAnalytics.riskLevel}</span>
-                    </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             </div>
           </div>
