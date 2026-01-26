@@ -51,6 +51,7 @@ export default function Analytics() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [assignmentStats, setAssignmentStats] = useState<AssignmentStats>({ completed: 0, pending: 0, overdue: 0, total: 0 });
   const [progressData, setProgressData] = useState<any[]>([]);
+  const [weeklyProgressData, setWeeklyProgressData] = useState<any[]>([]);
 
   useEffect(() => {
     loadAnalytics();
@@ -70,15 +71,22 @@ export default function Analytics() {
       setCourses(courseList);
       setProgressData(progressOverview);
 
+      // Set weekly progress data from first course's analytics
+      if (analyticsData?.courses && analyticsData.courses.length > 0) {
+        const weeklyData = analyticsData.courses[0].weeklyProgress || [];
+        setWeeklyProgressData(weeklyData.length > 0 ? weeklyData : []);
+        console.log('Weekly Progress Data:', weeklyData);
+      }
+
       const assignmentPromises = courseList.map((course: Course) => 
-        getCourseAssignments(course.id).catch(() => [])
+        getCourseAssignments(course.id).catch(() => ({ assignments: [] }))
       );
       const assignmentsResponses = await Promise.all(assignmentPromises);
-      const allAssignments = assignmentsResponses.flat();
+      const allAssignments = assignmentsResponses.flatMap((response: any) => response?.assignments || []);
       
       const now = Date.now() / 1000;
-      const completed = allAssignments.filter((a: any) => a.status === 'submitted').length;
-      const overdue = allAssignments.filter((a: any) => a.duedate && a.duedate < now && a.status !== 'submitted').length;
+      const completed = allAssignments.filter((a: any) => a.status === 'submitted' || a.status?.toLowerCase() === 'completed').length;
+      const overdue = allAssignments.filter((a: any) => a.duedate && a.duedate < now && a.status !== 'submitted' && a.status?.toLowerCase() !== 'completed').length;
       const pending = allAssignments.length - completed - overdue;
       
       setAssignmentStats({
@@ -228,7 +236,7 @@ export default function Analytics() {
               <div className="bg-white dark:bg-[#1A1C20] rounded-xl p-6 border border-gray-200 dark:border-[#2A2D32]">
                 <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-6">Learning Progress by Week</h3>
                 <ResponsiveContainer width="100%" height={300}>
-                  <LineChart data={analytics?.courses[0]?.weeklyProgress || []}>
+                  <LineChart data={weeklyProgressData && weeklyProgressData.length > 0 ? weeklyProgressData : [{ week: 'No Data', progress: 0 }]}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                     <XAxis dataKey="week" />
                     <YAxis />

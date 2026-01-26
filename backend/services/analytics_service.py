@@ -18,51 +18,47 @@ class AnalyticsService:
         
         Returns:
         [
-            { "week": "2024-W10", "progress": 45 },
-            { "week": "2024-W11", "progress": 62 }
+            { "week": "Week 1", "progress": 25 },
+            { "week": "Week 2", "progress": 50 }
         ]
         """
         try:
-            fs = FirestoreService()
+            # Get current progress from cache or compute it
+            cached_progress = ProgressService.get_cached_course_progress(firebase_uid, course_id)
             
-            # Get progress snapshots from Firestore (cached data)
-            progress_doc = fs.db.collection("progress").document(firebase_uid).collection(
-                "courses"
-            ).document(str(course_id)).get()
-            
-            if not progress_doc.exists:
+            if not cached_progress:
+                # If no cached progress, return empty
                 return []
             
-            progress_data = progress_doc.to_dict()
-            current_progress = progress_data.get("progress", 0)
+            current_progress = cached_progress.get("progress", 0.0)
             
-            # For now, return simple weekly trend
-            now = datetime.utcnow()
-            current_week = now.strftime("%Y-W%U")
-            
-            # Simulate weekly trend (in production, fetch from historical data)
+            # Generate weekly trend based on current progress
+            # Assuming linear progression towards current progress
             weeks_back = 4
             weekly_data = []
+            
             for i in range(weeks_back, 0, -1):
-                week_date = now - timedelta(weeks=i)
-                week_str = week_date.strftime("%Y-W%U")
-                # Simulate historical progress (in reality, you'd fetch actual snapshots)
-                simulated_progress = max(0, current_progress - (i * 10))
+                week_num = weeks_back - i + 1
+                # Generate incremental progress towards current
+                simulated_progress = round((current_progress / weeks_back) * week_num, 1)
                 weekly_data.append({
-                    "week": week_str,
-                    "progress": round(simulated_progress, 1)
+                    "week": f"Week {week_num}",
+                    "progress": simulated_progress
                 })
             
-            # Add current week
+            # Add current week with actual progress
             weekly_data.append({
-                "week": current_week,
+                "week": f"Week {weeks_back + 1}",
                 "progress": round(current_progress, 1)
             })
             
+            print(f"Generated weekly progress for user {firebase_uid}, course {course_id}: {weekly_data}")
             return weekly_data
         
         except Exception as e:
             print(f"Error computing weekly progress: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
     @staticmethod
