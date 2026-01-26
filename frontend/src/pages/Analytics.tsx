@@ -18,6 +18,8 @@ import { Link } from 'react-router-dom';
 import {
   LineChart,
   Line,
+  AreaChart,
+  Area,
   BarChart,
   Bar,
   PieChart,
@@ -29,6 +31,8 @@ import {
   Tooltip,
   ResponsiveContainer,
   Legend,
+  RadialBarChart,
+  RadialBar,
 } from 'recharts';
 
 interface Course {
@@ -52,6 +56,7 @@ export default function Analytics() {
   const [assignmentStats, setAssignmentStats] = useState<AssignmentStats>({ completed: 0, pending: 0, overdue: 0, total: 0 });
   const [progressData, setProgressData] = useState<any[]>([]);
   const [weeklyProgressData, setWeeklyProgressData] = useState<any[]>([]);
+  const [averageVelocity, setAverageVelocity] = useState<number>(0);
 
   useEffect(() => {
     loadAnalytics();
@@ -76,6 +81,11 @@ export default function Analytics() {
         const weeklyData = analyticsData.courses[0].weeklyProgress || [];
         setWeeklyProgressData(weeklyData.length > 0 ? weeklyData : []);
         console.log('Weekly Progress Data:', weeklyData);
+        
+        // Calculate average velocity from all courses
+        const velocities = analyticsData.courses.map(c => c.velocity || 0);
+        const avgVel = velocities.length > 0 ? velocities.reduce((a, b) => a + b, 0) / velocities.length : 0;
+        setAverageVelocity(Math.round(avgVel * 100) / 100);
       }
 
       const assignmentPromises = courseList.map((course: Course) => 
@@ -273,23 +283,90 @@ export default function Analytics() {
                 </ResponsiveContainer>
               </div>
             </div>
-            <div className="bg-white dark:bg-[#1A1C20] rounded-xl p-6 border border-gray-200 dark:border-[#2A2D32]">
-              <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-6">Course Performance</h3>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={courses.map((course) => {
-                  const progressPercent = progressData.find(p => p.courseId === course.id)?.progress || 0;
-                  return {
-                    name: course.shortname,
-                    score: progressPercent
-                  };
-                })}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" />
-                  <YAxis />
-                  <Tooltip />
-                  <Bar dataKey="score" fill="#0047AB" />
-                </BarChart>
-              </ResponsiveContainer>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="bg-white dark:bg-[#1A1C20] rounded-xl p-6 border border-gray-200 dark:border-[#2A2D32]">
+                <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-6">Course Performance</h3>
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={courses.map((course) => {
+                    const progressPercent = progressData.find(p => p.courseId === course.id)?.progress || 0;
+                    return {
+                      name: course.shortname,
+                      score: progressPercent
+                    };
+                  })}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" />
+                    <YAxis />
+                    <Tooltip />
+                    <Bar dataKey="score" fill="#0047AB" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="bg-white dark:bg-[#1A1C20] rounded-xl p-6 border border-gray-200 dark:border-[#2A2D32]">
+                <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-6">Completion Velocity</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {courses.map((course, idx) => {
+                    const courseAnalytics = analytics?.courses.find(c => c.courseId === course.id);
+                    const velocity = courseAnalytics?.velocity || 0;
+                    const maxVelocity = 3;
+                    const percentage = Math.min((velocity / maxVelocity) * 100, 100);
+                    const colors = ['from-blue-500 to-blue-600', 'from-cyan-500 to-cyan-600', 'from-teal-500 to-teal-600', 'from-red-500 to-red-600'];
+                    const colorClass = colors[idx % 4];
+                    
+                    return (
+                      <div key={course.id} className="bg-gradient-to-br from-gray-50 to-gray-100 dark:from-[#2A2D32] dark:to-[#1F2228] rounded-lg p-5 border border-gray-200 dark:border-[#3A3D42]">
+                        <div className="flex items-center justify-between mb-4">
+                          <div>
+                            <p className="text-sm font-semibold text-gray-600 dark:text-gray-400 truncate">{course.shortname}</p>
+                            <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">{Math.round(velocity * 100) / 100}</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">activities/week</p>
+                          </div>
+                          <div className="relative w-20 h-20 flex-shrink-0">
+                            <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
+                              <circle
+                                cx="50"
+                                cy="50"
+                                r="45"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="8"
+                                className="text-gray-300 dark:text-gray-600"
+                              />
+                              <circle
+                                cx="50"
+                                cy="50"
+                                r="45"
+                                fill="none"
+                                stroke="url(#gradient)"
+                                strokeWidth="8"
+                                strokeDasharray={`${(percentage / 100) * 283} 283`}
+                                strokeLinecap="round"
+                                className="transition-all duration-700"
+                              />
+                              <defs>
+                                <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                  <stop offset="0%" stopColor={colorClass === 'from-blue-500 to-blue-600' ? '#3B82F6' : colorClass === 'from-cyan-500 to-cyan-600' ? '#06B6D4' : colorClass === 'from-teal-500 to-teal-600' ? '#14B8A6' : '#EF4444'} />
+                                  <stop offset="100%" stopColor={colorClass === 'from-blue-500 to-blue-600' ? '#1D4ED8' : colorClass === 'from-cyan-500 to-cyan-600' ? '#0891B2' : colorClass === 'from-teal-500 to-teal-600' ? '#0D9488' : '#DC2626'} />
+                                </linearGradient>
+                              </defs>
+                            </svg>
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <span className="text-xs font-bold text-gray-900 dark:text-white text-center">{Math.round(percentage)}%</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="mt-4 flex items-center justify-between">
+                          <div className="text-xs text-gray-600 dark:text-gray-400">
+                            {velocity >= 2.5 && <span className="text-green-600 dark:text-green-400 font-semibold">🚀 High Pace</span>}
+                            {velocity >= 1.5 && velocity < 2.5 && <span className="text-blue-600 dark:text-blue-400 font-semibold">📈 Steady</span>}
+                            {velocity < 1.5 && <span className="text-orange-600 dark:text-orange-400 font-semibold">⚠️ Slow</span>}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="bg-gradient-to-r from-[#1E5BF0] to-[#2C7CF0] rounded-xl p-6 text-white">
