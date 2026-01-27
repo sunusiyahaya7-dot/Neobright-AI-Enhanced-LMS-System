@@ -110,12 +110,35 @@ class ProgressService:
             completed = len(completed_ids)
             progress_percent = round((completed / total) * 100, 2) if total > 0 else 0.0
 
-            # Step 3: Build result with combined metrics
+            # Step 3: Fetch grades from Moodle
+            average_score = 0.0
+            try:
+                grades_data = MoodleService.get_course_grades(course_id, moodle_user_id)
+                usergrades = grades_data.get("usergrades", [])
+                
+                if usergrades and len(usergrades) > 0:
+                    # Calculate average from grade items
+                    grades = []
+                    for item in usergrades:
+                        if isinstance(item, dict):
+                            grade_value = item.get("gradevalue")
+                            if grade_value is not None:
+                                grades.append(float(grade_value))
+                    
+                    if grades:
+                        average_score = round(sum(grades) / len(grades), 2)
+                        print(f"Computed average score for course {course_id}: {average_score}")
+            except Exception as e:
+                print(f"Warning: Could not fetch grades for course {course_id}: {e}")
+                average_score = 0.0
+
+            # Step 4: Build result with combined metrics
             result = {
                 "courseId": course_id,
                 "progress": progress_percent,
                 "completedActivities": completed,
                 "totalActivities": total,
+                "averageScore": average_score,
                 "lastFetched": int(datetime.utcnow().timestamp())
             }
             
@@ -131,6 +154,7 @@ class ProgressService:
                 "progress": 0.0,
                 "completedActivities": 0,
                 "totalActivities": 0,
+                "averageScore": 0.0,
                 "lastFetched": int(datetime.utcnow().timestamp()),
                 "error": str(e)
             }
@@ -231,6 +255,7 @@ class ProgressService:
                         ├── progress: 72.5
                         ├── completed: 29
                         ├── total: 40
+                        ├── averageScore: 85.5
                         ├── lastSynced: timestamp
         """
         try:
@@ -240,6 +265,7 @@ class ProgressService:
                 "progress": progress_data.get("progress", 0.0),
                 "completed": progress_data.get("completedActivities", 0),
                 "total": progress_data.get("totalActivities", 0),
+                "averageScore": progress_data.get("averageScore", 0.0),
                 "lastSynced": datetime.utcnow()
             }
             

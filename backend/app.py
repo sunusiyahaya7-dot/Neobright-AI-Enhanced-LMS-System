@@ -3,6 +3,7 @@ from flask import Flask, jsonify
 from flask_cors import CORS
 from config import Config
 from api.moodle_routes import moodle_bp
+from api.ai_routes import ai_bp
 from routes.pluginfile import pluginfile_bp
 from routes.enrollment_routes import enrollment_bp
 from routes.materials_routes import materials_bp
@@ -36,6 +37,7 @@ def create_app():
 
     # Register blueprints
     app.register_blueprint(moodle_bp)
+    app.register_blueprint(ai_bp)
     app.register_blueprint(materials_bp)
     app.register_blueprint(pluginfile_bp)
     app.register_blueprint(enrollment_bp)
