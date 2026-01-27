@@ -356,6 +356,49 @@ class MoodleService:
             return {"statuses": []}
     
     @staticmethod
+    def get_course_grades(course_id: int, moodle_user_id: int):
+        """
+        Fetch student grades/scores for a course.
+        
+        Uses Moodle gradereport_user_get_grade_items.
+        
+        Args:
+            course_id: Moodle course ID
+            moodle_user_id: Moodle user ID (student)
+        
+        Returns:
+            Dict with grades info and items
+        """
+        try:
+            print(f"Fetching grades for course {course_id}, user {moodle_user_id}...")
+            url = MoodleService._build_url("gradereport_user_get_grade_items")
+            params = {
+                "courseid": course_id,
+                "userid": moodle_user_id
+            }
+            
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            print(f"Grades response: {data}")
+            
+            # Check for Moodle errors
+            if isinstance(data, dict) and "exception" in data:
+                error_msg = f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                print(f"Error from Moodle: {error_msg}")
+                raise RuntimeError(error_msg)
+            
+            return data
+        
+        except Exception as e:
+            print(f"Error fetching grades for course {course_id}, user {moodle_user_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            # Return empty response instead of failing
+            return {"usergrades": []}
+    
+    @staticmethod
     def _get_timestamp():
         """Get current timestamp in Moodle format."""
         from datetime import datetime
