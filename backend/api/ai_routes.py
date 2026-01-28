@@ -73,10 +73,15 @@ def get_ai_insights():
     }
     """
     try:
+        from models.ai_models import StudentContext
+        
         firebase_uid = g.firebase_uid
         
-        # Build AI context from aggregated data
-        context = AIContextService.build_ai_context(firebase_uid)
+        # Build AI context from aggregated data (returns dict)
+        context_dict = AIContextService.build_ai_context(firebase_uid)
+        
+        # Convert dict to StudentContext object
+        context = StudentContext.from_dict(context_dict)
         
         # Generate insights using AiService
         insights = AiService.generate_insights(context, current_app.config)

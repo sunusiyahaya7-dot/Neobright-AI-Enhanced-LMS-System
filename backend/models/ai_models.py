@@ -81,15 +81,30 @@ class StudentContext:
         """
         Build StudentContext from dict (e.g., from API response).
         Used when consuming Phase 0 AI context endpoint.
+        Handles both camelCase (from API) and snake_case (from internal).
         """
+        # Helper to convert camelCase to snake_case
+        def camel_to_snake(name: str) -> str:
+            import re
+            s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+            return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+        # Convert analytics
         analytics_data = data.get('analytics')
         analytics = None
         if analytics_data:
-            analytics = OverallAnalytics(**analytics_data)
-        
+            # Convert camelCase keys to snake_case
+            analytics_snake = {camel_to_snake(k): v for k, v in analytics_data.items()}
+            analytics = OverallAnalytics(**analytics_snake)
+
+        # Convert courses
         courses_data = data.get('courses', [])
-        courses = [CourseAnalytics(**c) for c in courses_data]
-        
+        courses = []
+        for course in courses_data:
+            # Convert camelCase keys to snake_case
+            course_snake = {camel_to_snake(k): v for k, v in course.items()}
+            courses.append(CourseAnalytics(**course_snake))
+
         return cls(
             student_id=data['student']['id'],
             name=data['student']['name'],
