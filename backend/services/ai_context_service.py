@@ -101,11 +101,19 @@ class AIContextService:
                         )
                         cached_progress = progress_data
                     
+                    # Get average score, treat 0.0 as missing data
+                    avg_score = cached_progress.get("averageScore", 0)
+                    avg_score = avg_score if avg_score > 0 else None
+                    
+                    # Get average score, treat 0.0 as missing data (no grades released yet)
+                    avg_score = cached_progress.get("averageScore", 0)
+                    avg_score = avg_score if avg_score > 0 else None
+                    
                     course_context = {
                         "id": course.get("shortname", str(course.get("id"))),
                         "name": course.get("fullname", "Unknown"),
                         "progress": cached_progress.get("progress", 0),
-                        "averageScore": cached_progress.get("averageScore", 0),
+                        "averageScore": avg_score,  # None if no grades yet
                         "completedActivities": cached_progress.get("completed", 0),
                         "totalActivities": cached_progress.get("total", 0),
                         "lastAccess": cached_progress.get("lastSynced").isoformat() if cached_progress.get("lastSynced") else datetime.utcnow().isoformat()

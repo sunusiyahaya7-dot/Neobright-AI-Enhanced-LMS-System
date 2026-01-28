@@ -1,0 +1,22 @@
+@baseUrl = http://localhost:5000
+@token = "logged-in_user_token_here""
+### Health Check (No rate limit)
+GET {{baseUrl}}/health
+
+### AI Context (No rate limit)
+GET {{baseUrl}}/api/ai/context
+Authorization: Bearer {{token}}
+
+### AI Insights - Call 1 (Should work)
+GET {{baseUrl}}/api/ai/insights
+Authorization: Bearer {{token}}
+
+### AI Insights - Call 2 (Should work - 2/minute limit)
+GET {{baseUrl}}/api/ai/insights
+Authorization: Bearer {{token}}
+
+### AI Insights - Call 3 (Should fail with 429)
+# This should return 429 Too Many Requests
+# Error: "Rate limit exceeded. Please wait X seconds."
+GET {{baseUrl}}/api/ai/insights
+Authorization: Bearer {{token}}
