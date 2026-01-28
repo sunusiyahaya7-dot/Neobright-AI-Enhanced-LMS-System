@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, g, current_app
 from auth.firebase_auth import firebase_required
 from services.ai_context_service import AIContextService
 from services.ai_service import AiService
+from services.ai_rate_limit_service import ai_rate_limit
 
 
 ai_bp = Blueprint('ai', __name__, url_prefix='/api')
@@ -50,11 +51,14 @@ def get_ai_context():
 
 @ai_bp.route('/ai/insights', methods=['GET'])
 @firebase_required
+@ai_rate_limit  # Rate limit after auth (needs firebase_uid)
 def get_ai_insights():
     """
     GET /api/ai/insights
     
     Returns AI-generated insights for logged-in student.
+    
+    Rate limited to 2 calls/minute, 20 calls/hour per user.
     
     Uses:
     - StudentContext from /ai/context
@@ -83,8 +87,12 @@ def get_ai_insights():
         # Convert dict to StudentContext object
         context = StudentContext.from_dict(context_dict)
         
-        # Generate insights using AiService
-        insights = AiService.generate_insights(context, current_app.config)
+        # Generate insights using AiService (pass user_id for logging)
+        insights = AiService.generate_insights(
+            context, 
+            current_app.config,
+            user_id=firebase_uid  # For logging
+        )
         
         # Convert dataclass to dict for JSON response
         return jsonify(insights.to_dict()), 200

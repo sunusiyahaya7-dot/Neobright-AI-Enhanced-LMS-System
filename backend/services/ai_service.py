@@ -15,6 +15,7 @@ Architecture:
 """
 import json
 import logging
+import time
 from typing import Dict, Any, Optional
 from datetime import datetime
 
@@ -48,6 +49,8 @@ Your role:
 Constraints:
 - Do NOT invent courses, grades, or activities that don't exist in the data
 - Base all insights strictly on the provided student context
+- IGNORE null/None averageScore values - these mean grades haven't been released yet
+- Do NOT mention missing grades as a weakness
 - Be concise: summaries ~2 sentences, action items ~1-2 sentences each
 - Prioritize high-impact actions (focus on weak areas first)
 - Consider course deadlines and velocity when recommending timing
@@ -114,7 +117,9 @@ INSTRUCTIONS:
 
     @staticmethod
     def generate_insights(
-        context: StudentContext, app_config: Dict[str, Any]
+        context: StudentContext, 
+        app_config: Dict[str, Any],
+        user_id: Optional[str] = None
     ) -> AiInsights:
         """
         Generate AI insights for a student.
@@ -129,19 +134,41 @@ INSTRUCTIONS:
                 - AI_MODEL: Model name (e.g., "gpt-4o-mini")
                 - AI_TEMPERATURE: Temperature (0-1)
                 - AI_MAX_TOKENS: Max tokens
+            user_id: Firebase UID for logging (optional)
 
         Returns:
             AiInsights dataclass with generated insights
         """
+        from services.ai_logging_service import AiLoggingService
+        
+        start_time = time.time()
+        model_name = app_config.get("AI_MODEL", "gpt-4o-mini")
+        
         # Check if AI is configured
         if not app_config.get("OPENAI_API_KEY"):
             AiService.logger.warning(
                 "OPENAI_API_KEY not configured - using fallback insights"
             )
+            if user_id:
+                AiLoggingService.log_ai_call(
+                    user_id=user_id,
+                    endpoint="/api/ai/insights",
+                    model="fallback",
+                    success=True,
+                    error_message="No API key configured"
+                )
             return AiService.fallback_insights(context)
 
         if not OpenAI:
             AiService.logger.error("openai module not installed - using fallback")
+            if user_id:
+                AiLoggingService.log_ai_call(
+                    user_id=user_id,
+                    endpoint="/api/ai/insights",
+                    model="fallback",
+                    success=True,
+                    error_message="OpenAI module not installed"
+                )
             return AiService.fallback_insights(context)
 
         try:
@@ -153,7 +180,7 @@ INSTRUCTIONS:
 
             # Call OpenAI API
             response = client.chat.completions.create(
-                model=app_config.get("AI_MODEL", "gpt-4o-mini"),
+                model=model_name,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
@@ -164,16 +191,51 @@ INSTRUCTIONS:
 
             # Extract response text
             raw_text = response.choices[0].message.content
+            
+            # Get token usage from response
+            usage = response.usage
+            prompt_tokens = usage.prompt_tokens if usage else None
+            completion_tokens = usage.completion_tokens if usage else None
+            total_tokens = usage.total_tokens if usage else None
 
             AiService.logger.debug(f"LLM response: {raw_text[:200]}...")
 
             # Parse response to AiInsights
             insights = AiService.parse_insights(raw_text, context)
+            
+            # Calculate response time
+            response_time_ms = (time.time() - start_time) * 1000
+            
+            # Log successful API call
+            if user_id:
+                AiLoggingService.log_ai_call(
+                    user_id=user_id,
+                    endpoint="/api/ai/insights",
+                    model=model_name,
+                    success=True,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    response_time_ms=response_time_ms
+                )
 
             return insights
 
         except Exception as e:
             AiService.logger.error(f"AI generation failed: {str(e)}", exc_info=True)
+            
+            # Log failed API call
+            if user_id:
+                response_time_ms = (time.time() - start_time) * 1000
+                AiLoggingService.log_ai_call(
+                    user_id=user_id,
+                    endpoint="/api/ai/insights",
+                    model=model_name,
+                    success=False,
+                    error_message=str(e),
+                    response_time_ms=response_time_ms
+                )
+            
             return AiService.fallback_insights(context)
 
     @staticmethod
