@@ -1,4 +1,5 @@
 services:
+  # MariaDB Database
   db:
     image: mariadb:10.6
     container_name: neobright_moodle_db
@@ -15,7 +16,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    networks:
+      - neobright
 
+  # Moodle LMS
   moodle:
     image: jhardison/moodle:latest
     container_name: neobright_moodle_app
@@ -39,8 +43,48 @@ services:
     volumes:
       - moodledata:/var/moodledata
       - ./php.ini:/etc/php/7.4/apache2/conf.d/99-moodle.ini
+    networks:
+      - neobright
+
+  # Flask AI Backend
+  ai_backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: neobright_ai_backend
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT}:5000"
+    environment:
+      FLASK_ENV: ${FLASK_ENV}
+      FLASK_APP: app.py
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      AI_MODEL: ${AI_MODEL}
+      AI_TEMPERATURE: ${AI_TEMPERATURE}
+      AI_MAX_TOKENS: ${AI_MAX_TOKENS}
+      MOODLE_BASE_URL: http://moodle:80
+      MOODLE_TOKEN: ${MOODLE_TOKEN}
+      BACKEND_URL: http://ai_backend:5000
+      FIREBASE_SERVICE_ACCOUNT_PATH: /app/firebase-service-account.json
+    volumes:
+      - ../backend:/app
+      - ../backend/firebase-service-account.json:/app/firebase-service-account.json:ro
+    depends_on:
+      - moodle
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    networks:
+      - neobright
 
 volumes:
   moodle_db_data:
   moodle_data:
   moodledata:
+
+networks:
+  neobright:
+    driver: bridge
