@@ -1,7 +1,6 @@
-import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 
-const db = getFirestore();
+import api from '../api/client';
 
 export interface UserProfile {
   firebase_uid: string;
@@ -18,40 +17,13 @@ export interface UserProfile {
  * Create or update user profile in Firestore after authentication
  */
 export async function createOrUpdateUserProfile(user: User): Promise<void> {
-  const userRef = doc(db, 'users', user.uid);
-  
   try {
-    // Check if user already exists
-    const userDoc = await getDoc(userRef);
-    
-    if (!userDoc.exists()) {
-      // Create new user profile
-      const newUserProfile: UserProfile = {
-        firebase_uid: user.uid,
-        email: user.email || '',
-        display_name: user.displayName || user.email?.split('@')[0] || 'Student',
-        photo_url: user.photoURL || undefined,
-        created_at: serverTimestamp(),
-        updated_at: serverTimestamp(),
-        enrolled_courses: [],
-        role: 'student',
-      };
-      
-      await setDoc(userRef, newUserProfile);
-      console.log('✅ User profile created in Firestore:', user.uid);
-    } else {
-      // User exists, optionally update fields
-      const updates = {
-        display_name: user.displayName || userDoc.data().display_name,
-        photo_url: user.photoURL || userDoc.data().photo_url,
-        updated_at: serverTimestamp(),
-      };
-      
-      await setDoc(userRef, updates, { merge: true });
-      console.log('✅ User profile updated in Firestore:', user.uid);
-    }
+    await api.post('/users/me', {
+      display_name: user.displayName || user.email?.split('@')[0] || 'Student',
+      photo_url: user.photoURL || null,
+    });
   } catch (error) {
-    console.error('❌ Error creating/updating user profile:', error);
+    console.error('❌ Error creating/updating user profile via backend:', error);
     throw error;
   }
 }
@@ -61,15 +33,12 @@ export async function createOrUpdateUserProfile(user: User): Promise<void> {
  */
 export async function getUserProfile(uid: string): Promise<UserProfile | null> {
   try {
-    const userRef = doc(db, 'users', uid);
-    const userDoc = await getDoc(userRef);
-    
-    if (userDoc.exists()) {
-      return userDoc.data() as UserProfile;
-    }
-    return null;
+    void uid; // backend infers user from Firebase ID token
+    // uid is ignored; backend infers user from Firebase ID token
+    const res = await api.get('/users/me');
+    return (res.data?.profile || null) as UserProfile | null;
   } catch (error) {
-    console.error('❌ Error fetching user profile:', error);
+    console.error('❌ Error fetching user profile via backend:', error);
     return null;
   }
 }

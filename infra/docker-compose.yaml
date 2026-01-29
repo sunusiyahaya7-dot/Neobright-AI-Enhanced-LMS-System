@@ -9,9 +9,10 @@ services:
       MYSQL_USER: ${DB_USER}
       MYSQL_PASSWORD: ${DB_PASSWORD}
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-storage-engine=InnoDB --innodb-file-per-table=1 --innodb-file-format=Barracuda --innodb-large-prefix=ON
+    command: --defaults-file=/etc/mysql/conf.d/mariadb.cnf
     volumes:
       - moodle_db_data:/var/lib/mysql
+      - ./mariadb.cnf:/etc/mysql/conf.d/mariadb.cnf:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s
@@ -45,6 +46,7 @@ services:
     volumes:
       - moodledata:/var/moodledata
       - ./php.ini.conf:/etc/php/7.4/apache2/conf.d/99-moodle.ini
+      - ./moodle-init.sh:/docker-entrypoint.d/moodle-init.sh
     networks:
       - neobright
 
@@ -64,9 +66,11 @@ services:
       AI_MODEL: ${AI_MODEL}
       AI_TEMPERATURE: ${AI_TEMPERATURE}
       AI_MAX_TOKENS: ${AI_MAX_TOKENS}
-      MOODLE_BASE_URL: http://moodle:80
+      MOODLE_BASE_URL: ${MOODLE_BASE_URL}
+      MOODLE_INTERNAL_BASE_URL: ${MOODLE_INTERNAL_BASE_URL}
+      MOODLE_HOST_HEADER: ${MOODLE_HOST_HEADER}
       MOODLE_TOKEN: ${MOODLE_TOKEN}
-      BACKEND_URL: http://ai_backend:5000
+      BACKEND_URL: ${BACKEND_URL}
       FIREBASE_SERVICE_ACCOUNT_PATH: /app/firebase-service-account.json
     volumes:
       - ../backend:/app

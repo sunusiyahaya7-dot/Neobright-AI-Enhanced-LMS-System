@@ -1,0 +1,17 @@
+[mysqld]
+# Character set and collation
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci
+default-storage-engine = InnoDB
+
+# InnoDB settings for Moodle compatibility
+innodb_file_per_table = 1
+innodb_file_format = Barracuda
+innodb_large_prefix = ON
+
+# Performance settings
+max_allowed_packet = 256M
+innodb_buffer_pool_size = 512M
+
+# Logging (optional)
+log_error = /var/log/mysql/error.log

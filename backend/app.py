@@ -4,6 +4,7 @@ from flask_cors import CORS
 from config import Config
 from api.moodle_routes import moodle_bp
 from api.ai_routes import ai_bp
+from api.user_routes import user_bp
 from routes.pluginfile import pluginfile_bp
 from routes.enrollment_routes import enrollment_bp
 from routes.materials_routes import materials_bp
@@ -38,6 +39,7 @@ def create_app():
     # Register blueprints
     app.register_blueprint(moodle_bp)
     app.register_blueprint(ai_bp)
+    app.register_blueprint(user_bp)
     app.register_blueprint(materials_bp)
     app.register_blueprint(pluginfile_bp)
     app.register_blueprint(enrollment_bp)
@@ -49,7 +51,9 @@ def create_app():
     def health():
         return jsonify({
             "status": "ok",
-            "moodle_base_url": app.config["MOODLE_BASE_URL"]
+            "moodle_base_url": app.config["MOODLE_BASE_URL"],
+            "moodle_internal_base_url": app.config.get("MOODLE_INTERNAL_BASE_URL"),
+            "moodle_host_header": app.config.get("MOODLE_HOST_HEADER")
         })
     
 
