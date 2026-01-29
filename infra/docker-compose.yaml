@@ -9,6 +9,7 @@ services:
       MYSQL_USER: ${DB_USER}
       MYSQL_PASSWORD: ${DB_PASSWORD}
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-storage-engine=InnoDB --innodb-file-per-table=1 --innodb-file-format=Barracuda --innodb-large-prefix=ON
     volumes:
       - moodle_db_data:/var/lib/mysql
     healthcheck:
@@ -40,9 +41,10 @@ services:
       PHP_UPLOAD_MAX_FILESIZE: 512M
       PHP_POST_MAX_SIZE: 512M
       PHP_MEMORY_LIMIT: 256M
+      PHP_MAX_INPUT_VARS: "5000"
     volumes:
       - moodledata:/var/moodledata
-      - ./php.ini:/etc/php/7.4/apache2/conf.d/99-moodle.ini
+      - ./php.ini.conf:/etc/php/7.4/apache2/conf.d/99-moodle.ini
     networks:
       - neobright
 
@@ -82,8 +84,9 @@ services:
 
 volumes:
   moodle_db_data:
-  moodle_data:
+    driver: local
   moodledata:
+    driver: local
 
 networks:
   neobright:
