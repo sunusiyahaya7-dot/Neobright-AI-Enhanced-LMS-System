@@ -1,13 +1,48 @@
 import requests
+from urllib.parse import urlparse
 from flask import current_app
 
 class MoodleService:
+    @staticmethod
+    def _get_request_headers() -> dict:
+        """Headers used for Moodle requests.
+
+        Moodle will often redirect (303) if the request Host doesn't match $CFG->wwwroot.
+        In Docker on Windows, the backend may need to reach Moodle via host.docker.internal
+        while still presenting Host: localhost:8080.
+        """
+        configured = (current_app.config.get("MOODLE_HOST_HEADER") or "").strip()
+        if configured:
+            return {"Host": configured}
+
+        public_base = (current_app.config.get("MOODLE_BASE_URL") or "").strip()
+        netloc = urlparse(public_base).netloc
+        return {"Host": netloc} if netloc else {}
+
+    @staticmethod
+    def _request(method: str, url: str, **kwargs) -> requests.Response:
+        headers = dict(kwargs.pop("headers", {}) or {})
+        headers.update(MoodleService._get_request_headers())
+
+        # Moodle redirects are almost always a config/host mismatch in our setup.
+        kwargs.setdefault("allow_redirects", False)
+
+        response = requests.request(method, url, headers=headers, **kwargs)
+        if 300 <= response.status_code < 400:
+            location = response.headers.get("Location")
+            raise RuntimeError(
+                f"Moodle returned redirect {response.status_code} to {location}. "
+                "Check MOODLE_INTERNAL_BASE_URL / MOODLE_HOST_HEADER / Moodle wwwroot."
+            )
+
+        return response
+
     @staticmethod
     def _build_url(wsfunction: str) -> str:
         """
         Build full Moodle REST URL for a given function.
         """
-        base_url = current_app.config["MOODLE_BASE_URL"].rstrip("/")
+        base_url = (current_app.config.get("MOODLE_INTERNAL_BASE_URL") or current_app.config["MOODLE_BASE_URL"]).rstrip("/")
         token = current_app.config["MOODLE_TOKEN"]
 
         if not token:
@@ -27,7 +62,7 @@ class MoodleService:
         """
         url = MoodleService._build_url("core_course_get_courses")
 
-        response = requests.get(url, timeout=10)
+        response = MoodleService._request("GET", url, timeout=10)
         response.raise_for_status()  # raises if HTTP error
 
         data = response.json()
@@ -49,7 +84,7 @@ class MoodleService:
         url = MoodleService._build_url("core_enrol_get_users_courses")
         params = {"userid": moodle_user_id}
 
-        response = requests.get(url, params=params, timeout=10)
+        response = MoodleService._request("GET", url, params=params, timeout=10)
         response.raise_for_status()
 
         data = response.json()
@@ -67,7 +102,7 @@ class MoodleService:
         url = MoodleService._build_url("core_course_get_contents")
         params = {"courseid": course_id}
 
-        response = requests.get(url, params=params, timeout=10)
+        response = MoodleService._request("GET", url, params=params, timeout=10)
         response.raise_for_status()
 
         data = response.json()
@@ -78,6 +113,42 @@ class MoodleService:
         return data
 
     @staticmethod
+    def get_users_by_field(field: str, values: list):
+        """
+        Search for Moodle users by a field (email or username).
+        Uses core_user_get_users.
+        
+        Args:
+            field: "email" or "username"
+            values: List of values to search for
+        
+        Returns:
+            List of user objects matching the search
+        """
+        url = MoodleService._build_url("core_user_get_users")
+        
+        # Build params for each value
+        params = {}
+        for idx, value in enumerate(values):
+            params[f"criteria[{idx}][key]"] = field
+            params[f"criteria[{idx}][value]"] = value
+        
+        response = MoodleService._request("GET", url, params=params, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        # Check for Moodle errors
+        if isinstance(data, dict) and "exception" in data:
+            raise RuntimeError(
+                f"Moodle error: {data.get('exception')} - {data.get('message')}"
+            )
+        
+        # core_user_get_users returns {'users': [...], 'warnings': [...]}
+        users = data.get("users", []) if isinstance(data, dict) else []
+        return users
+
+    @staticmethod
     def get_assignment_details(course_id: int):
         """
         Fetch assignment details including introattachments.
@@ -86,7 +157,7 @@ class MoodleService:
         url = MoodleService._build_url("mod_assign_get_assignments")
         params = {"courseids[0]": course_id}
 
-        response = requests.get(url, params=params, timeout=10)
+        response = MoodleService._request("GET", url, params=params, timeout=10)
         response.raise_for_status()
 
         data = response.json()
@@ -101,7 +172,7 @@ class MoodleService:
     @staticmethod
     def get_file_url(file_path: str) -> str:
         """Build secure Moodle file URL using server-side token."""
-        base_url = current_app.config["MOODLE_BASE_URL"].rstrip("/")
+        base_url = (current_app.config.get("MOODLE_INTERNAL_BASE_URL") or current_app.config["MOODLE_BASE_URL"]).rstrip("/")
         token = current_app.config["MOODLE_TOKEN"]
         
         if not token:
@@ -112,7 +183,7 @@ class MoodleService:
     @staticmethod
     def fetch_file_stream(file_url: str):
         """Stream a file from Moodle without loading it fully into memory."""
-        response = requests.get(file_url, stream=True, timeout=30)
+        response = MoodleService._request("GET", file_url, stream=True, timeout=30)
         response.raise_for_status()
 
         return response
@@ -139,7 +210,7 @@ class MoodleService:
                 file_data.seek(0)
             
             files = {'file': (filename, file_data)}
-            upload_response = requests.post(upload_url, files=files, timeout=30)
+            upload_response = MoodleService._request("POST", upload_url, files=files, timeout=30)
             upload_response.raise_for_status()
             
             upload_data = upload_response.json()
@@ -163,7 +234,7 @@ class MoodleService:
                 'plugindata[files_filemanager]': draft_item_id
             }
             
-            save_response = requests.post(save_url, data=save_params, timeout=10)
+            save_response = MoodleService._request("POST", save_url, data=save_params, timeout=10)
             save_response.raise_for_status()
             save_data = save_response.json()
             
@@ -180,7 +251,7 @@ class MoodleService:
                 'acceptsubmissionstatement': 1
             }
             
-            submit_response = requests.post(submit_url, data=submit_params, timeout=10)
+            submit_response = MoodleService._request("POST", submit_url, data=submit_params, timeout=10)
             submit_response.raise_for_status()
             submit_data = submit_response.json()
             
@@ -215,7 +286,7 @@ class MoodleService:
     @staticmethod
     def _build_upload_url() -> str:
         """Build Moodle file upload URL for draft files."""
-        base_url = current_app.config["MOODLE_BASE_URL"].rstrip("/")
+        base_url = (current_app.config.get("MOODLE_INTERNAL_BASE_URL") or current_app.config["MOODLE_BASE_URL"]).rstrip("/")
         token = current_app.config["MOODLE_TOKEN"]
         
         if not token:

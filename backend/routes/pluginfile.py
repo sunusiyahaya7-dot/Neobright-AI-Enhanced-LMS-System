@@ -27,8 +27,7 @@ def proxy_file(file_path):
         file_url = MoodleService.get_file_url(file_path)
         
         # Stream file from Moodle
-        moodle_response = requests.get(file_url, stream=True, timeout=30)
-        moodle_response.raise_for_status()
+        moodle_response = MoodleService.fetch_file_stream(file_url)
 
         # Force download with attachment disposition (don't render inline)
         content_disposition = moodle_response.headers.get("Content-Disposition", "")
@@ -47,7 +46,9 @@ def proxy_file(file_path):
             }
         )
     
-    except requests.exceptions.HTTPError as e:
+    except requests.exceptions.HTTPError:
         abort(404, description="File not found or access denied")
-    except Exception as e:
+    except RuntimeError as e:
+        abort(502, description=str(e))
+    except Exception:
         abort(500, description="Error retrieving file")

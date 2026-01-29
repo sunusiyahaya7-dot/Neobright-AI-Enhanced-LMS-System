@@ -1,5 +1,6 @@
+/// <reference types="vite/client" />
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from "axios";
-import { getIdToken } from "../services/authService";
+import { auth } from "../firebase";
 
 /**
  * API client with automatic Firebase ID token injection.
@@ -15,7 +16,7 @@ const api: AxiosInstance = axios.create({
  */
 api.interceptors.request.use(
   async (config: InternalAxiosRequestConfig) => {
-    const token = await getIdToken();
+    const token = await auth.currentUser?.getIdToken();
     if (token) {
       if (!config.headers) {
         config.headers = {} as any;

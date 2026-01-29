@@ -7,6 +7,12 @@ load_dotenv()
 
 class Config:
     MOODLE_BASE_URL = os.getenv("MOODLE_BASE_URL", "http://localhost:8080")
+    # Optional internal base URL for server-to-server calls (useful in Docker on Windows).
+    # Example: public=http://localhost:8080, internal=http://host.docker.internal:8080
+    MOODLE_INTERNAL_BASE_URL = os.getenv("MOODLE_INTERNAL_BASE_URL", MOODLE_BASE_URL)
+    # Optional Host header override to match Moodle's configured wwwroot host.
+    # Example: localhost:8080
+    MOODLE_HOST_HEADER = os.getenv("MOODLE_HOST_HEADER", "")
     MOODLE_TOKEN = os.getenv("MOODLE_TOKEN")
     DEBUG = os.getenv("FLASK_ENV") == "development"
     PORT = int(os.getenv("PORT", 5000))
