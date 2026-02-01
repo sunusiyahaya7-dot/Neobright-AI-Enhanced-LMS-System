@@ -38,6 +38,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [courses, setCourses] = useState<Course[]>([]);
+  const [assignments, setAssignments] = useState<CourseAssignment[]>([]);
   const [progressData, setProgressData] = useState<ProgressOverview[]>([]);
   const [averageGrade, setAverageGrade] = useState<number>(0);
   const [assignmentStats, setAssignmentStats] = useState<{ dueCount: number; doneCount: number; totalCount: number; nextDue?: number }>({ dueCount: 0, doneCount: 0, totalCount: 0 });
@@ -68,7 +69,7 @@ export default function Dashboard() {
 
         // Fetch all assignments concurrently for better UX
         const assignmentsResponses = await Promise.all(
-          courseList.map((course) =>
+          courseList.map((course: Course) =>
             getCourseAssignments(course.id).catch((err) => {
               console.error(`Failed to fetch assignments for course ${course.id}:`, err);
               return { assignments: [] } as { assignments: CourseAssignment[] };
@@ -77,6 +78,7 @@ export default function Dashboard() {
         );
 
         const allAssignments: CourseAssignment[] = assignmentsResponses.flatMap((res) => res.assignments || []);
+        setAssignments(allAssignments);
 
         // Calculate average grade from submitted assignments
         const gradedAssignments = allAssignments.filter((a) => a.grade !== undefined && a.grade !== null);
@@ -230,7 +232,7 @@ export default function Dashboard() {
                   </Link>
 
                   <Link
-                    to="/assignments"
+                    to="/Courses"
                     className="block p-4 bg-white dark:bg-[#1A1C20] border border-gray-200 dark:border-[#2A2D32] rounded-lg hover:border-[#1E5BF0] dark:hover:border-[#2C7CF0] transition-all"
                   >
                     <div className="flex items-start gap-3">
@@ -265,22 +267,52 @@ export default function Dashboard() {
               <div className="lg:col-span-2">
                 <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">Upcoming Tasks</h3>
                 <div className="bg-white dark:bg-[#1A1C20] rounded-lg border border-gray-200 dark:border-[#2A2D32] divide-y divide-gray-200 dark:divide-[#2A2D32]">
-                  {[
-                    { title: 'CSC121 Programming Assignment', due: 'Due in 2 days' },
-                    { title: 'Database Systems Quiz', due: 'Due Friday' },
-                    { title: 'Network Security Reading', due: 'Due next week' },
-                  ].map((task, idx) => (
-                    <div key={idx} className="p-4 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-[#2A2D32] transition-colors">
-                      <div className="flex items-center gap-3">
-                        <div className="w-3 h-3 rounded-full bg-[#1E5BF0]"></div>
-                        <div>
-                          <p className="font-medium text-gray-900 dark:text-white">{task.title}</p>
-                          <p className="text-sm text-gray-600 dark:text-gray-400">{task.due}</p>
-                        </div>
+                  {(() => {
+                    const upcomingTasks = assignments
+                      .filter((a) => (a.status || '').toLowerCase() !== 'submitted')
+                      .sort((a, b) => (a.duedate || Infinity) - (b.duedate || Infinity))
+                      .slice(0, 5);
+                    
+                    return upcomingTasks.length === 0 ? (
+                      <div className="p-4 text-center text-gray-500 dark:text-gray-400">
+                        No upcoming assignments
                       </div>
-                      <Calendar size={20} className="text-gray-400" />
-                    </div>
-                  ))}
+                    ) : (
+                      upcomingTasks
+                      .map((task, idx) => {
+                        const dueDate = task.duedate ? new Date((task.duedate || 0) * 1000) : null;
+                        const now = new Date();
+                        const isOverdue = dueDate && dueDate < now;
+                        const daysUntil = dueDate ? Math.ceil((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)) : null;
+                        
+                        let dueText = 'No due date';
+                        if (isOverdue) {
+                          dueText = 'OVERDUE';
+                        } else if (daysUntil === 0) {
+                          dueText = 'Due today';
+                        } else if (daysUntil === 1) {
+                          dueText = 'Due tomorrow';
+                        } else if (daysUntil) {
+                          dueText = `Due in ${daysUntil} days`;
+                        }
+                        
+                        return (
+                          <div key={idx} className="p-4 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-[#2A2D32] transition-colors">
+                            <div className="flex items-center gap-3">
+                              <div className={`w-3 h-3 rounded-full ${isOverdue ? 'bg-red-500' : 'bg-[#1E5BF0]'}`}></div>
+                              <div>
+                                <p className="font-medium text-gray-900 dark:text-white">{task.name}</p>
+                                <p className={`text-sm ${isOverdue ? 'text-red-600 dark:text-red-400 font-semibold' : 'text-gray-600 dark:text-gray-400'}`}>
+                                  {dueText}
+                                </p>
+                              </div>
+                            </div>
+                            <Calendar size={20} className={isOverdue ? 'text-red-500' : 'text-gray-400'} />
+                          </div>
+                        );
+                      })
+                    );
+                  })()}
                 </div>
               </div>
             </div>
