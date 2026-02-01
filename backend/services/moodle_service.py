@@ -474,3 +474,50 @@ class MoodleService:
         """Get current timestamp in Moodle format."""
         from datetime import datetime
         return int(datetime.utcnow().timestamp())
+
+    @staticmethod
+    def mark_activity_complete(moodle_user_id: int, cmid: int, is_complete: bool = True):
+        """
+        Mark an activity as complete/incomplete in Moodle.
+        
+        Uses Moodle core_completion_update_activity_completion_status_manually.
+        
+        Args:
+            moodle_user_id: Moodle user ID (student)
+            cmid: Course module ID (activity ID)
+            is_complete: Whether to mark as complete (True) or incomplete (False)
+        
+        Returns:
+            Response from Moodle (usually empty dict on success)
+        """
+        try:
+            print(f"Marking activity {cmid} as {'complete' if is_complete else 'incomplete'} for user {moodle_user_id}...")
+            
+            url = MoodleService._build_url(
+                "core_completion_update_activity_completion_status_manually"
+            )
+            params = {
+                "cmid": cmid,
+                "userid": moodle_user_id,
+                "completed": 1 if is_complete else 0
+            }
+            
+            response = MoodleService._request("POST", url, params=params, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            print(f"Mark complete response: {data}")
+            
+            # Check for Moodle errors
+            if isinstance(data, dict) and "exception" in data:
+                error_msg = f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                print(f"Error from Moodle: {error_msg}")
+                raise RuntimeError(error_msg)
+            
+            return {"success": True}
+        
+        except Exception as e:
+            print(f"Error marking activity {cmid} complete for user {moodle_user_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise

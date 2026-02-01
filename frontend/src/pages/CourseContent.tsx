@@ -157,10 +157,12 @@ export default function CourseContent() {
   };
 
   const handleActivityComplete = async (activityId: number) => {
-    // Progress now comes directly from Moodle completion status
-    // No local marking needed - just refresh to see Moodle's state
+    // Refresh both progress and completions from Moodle
     try {
-      fetchCourseProgress();
+      await Promise.all([
+        fetchCourseProgress(),
+        fetchCompletions()
+      ]);
     } catch (err) {
       console.error('Failed to refresh progress:', err);
     }
@@ -415,10 +417,13 @@ export default function CourseContent() {
                                               </p>
                                             </div>
                                             <div onClick={(e) => e.stopPropagation()}>
-                                              {/* Progress now tracked via Moodle native completion */}
-                                              <div className="text-xs text-gray-600 dark:text-gray-400 px-2 py-1 rounded bg-gray-100 dark:bg-[#1A1C20]">
-                                                {completions[String(mod.id)] ? '✓ Done' : 'Pending'}
-                                              </div>
+                                              <MarkAsDoneButton
+                                                activityId={mod.id}
+                                                courseId={Number(id)}
+                                                isComplete={completions[String(mod.id)] || false}
+                                                onComplete={handleActivityComplete}
+                                                size="sm"
+                                              />
                                             </div>
                                           </div>
 

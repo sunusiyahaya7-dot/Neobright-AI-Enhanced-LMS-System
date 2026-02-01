@@ -96,9 +96,17 @@ class ProgressService:
                 if status_is_complete(s) and cmid is not None:
                     completed_ids.add(str(cmid))
 
-            # Use only Moodle's native completion status (no Firestore overlay)
-            # This ensures progress is always based on authoritative Moodle data
-            print(f"Moodle-marked complete (state=1): {completed_ids}")
+            # Merge: Moodle's native completion + user-marked completions from Firestore
+            # Only consider cmids that exist in Moodle (to avoid ID mismatches)
+            if firebase_uid:
+                user_completions = ProgressService.get_course_completions(firebase_uid, course_id)
+                for aid, is_done in user_completions.items():
+                    if is_done and str(aid) in cmid_set:
+                        completed_ids.add(str(aid))
+                print(f"User-marked completions from Firestore: {user_completions}")
+                print(f"Final combined completions: {completed_ids}")
+            else:
+                print(f"Moodle-marked complete (state=1): {completed_ids}")
 
             completed = len(completed_ids)
             progress_percent = round((completed / total) * 100, 2) if total > 0 else 0.0
