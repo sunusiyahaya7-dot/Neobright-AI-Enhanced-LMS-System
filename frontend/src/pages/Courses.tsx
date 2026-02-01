@@ -72,6 +72,15 @@ export default function Courses() {
     fetchCourses();
   }, []);
 
+  // Auto-refresh progress every 5 seconds while on this page
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchProgress();
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, []);
+
   const fetchCourses = async () => {
     try {
       setLoading(true);
@@ -92,11 +101,13 @@ export default function Courses() {
     try {
       setProgressLoading(true);
       const overview = await progressService.getProgressOverview();
+      console.log('Progress overview fetched:', overview);
       const progressMap: Record<number, ProgressOverview> = {};
       overview.forEach(p => {
         progressMap[p.courseId] = p;
       });
       setProgressData(progressMap);
+      console.log('Progress data updated:', progressMap);
     } catch (err) {
       console.error('Failed to fetch progress overview:', err);
       // Continue without progress data
@@ -109,6 +120,10 @@ export default function Courses() {
     if (progress >= 75) return '#1ABC9C';
     if (progress >= 50) return '#1E5BF0';
     return '#FF6B6B';
+  };
+
+  const handleRefreshProgress = async () => {
+    await fetchProgress();
   };
 
   const filters = [

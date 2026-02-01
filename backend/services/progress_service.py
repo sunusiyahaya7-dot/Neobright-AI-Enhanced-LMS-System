@@ -96,16 +96,17 @@ class ProgressService:
                 if status_is_complete(s) and cmid is not None:
                     completed_ids.add(str(cmid))
 
-            # Overlay user-marked completions from Firestore (if available)
+            # Merge: Moodle's native completion + user-marked completions from Firestore
+            # Only consider cmids that exist in Moodle (to avoid ID mismatches)
             if firebase_uid:
-                try:
-                    user_completions = ProgressService.get_course_completions(firebase_uid, course_id)
-                    for aid, is_done in (user_completions or {}).items():
-                        if is_done and ((not cmid_set) or (str(aid) in cmid_set)):
-                            completed_ids.add(str(aid))
-                except Exception as _:
-                    # Ignore overlay errors; fallback to Moodle-only
-                    pass
+                user_completions = ProgressService.get_course_completions(firebase_uid, course_id)
+                for aid, is_done in user_completions.items():
+                    if is_done and str(aid) in cmid_set:
+                        completed_ids.add(str(aid))
+                print(f"User-marked completions from Firestore: {user_completions}")
+                print(f"Final combined completions: {completed_ids}")
+            else:
+                print(f"Moodle-marked complete (state=1): {completed_ids}")
 
             completed = len(completed_ids)
             progress_percent = round((completed / total) * 100, 2) if total > 0 else 0.0
@@ -184,7 +185,7 @@ class ProgressService:
                 str(activity_id)
             ).set(completion_doc, merge=True)
             
-            print(f"Marked activity {activity_id} as complete for user {firebase_uid}")
+            print(f"✅ Stored in Firestore: completions/{firebase_uid}/courses/{course_id}/activities/{activity_id}")
             return True
         
         except Exception as e:
