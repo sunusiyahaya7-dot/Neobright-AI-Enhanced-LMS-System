@@ -82,6 +82,8 @@ def get_unified_materials(course_id: int):
                     "description": module.get("description"),
                     "files": []
                 }
+                
+                print(f"Module: name={module.get('name')}, cmid={module.get('id')}, modname={module.get('modname')}")
 
                 # Add files from module.contents (regular resources)
                 for content in module.get("contents", []):

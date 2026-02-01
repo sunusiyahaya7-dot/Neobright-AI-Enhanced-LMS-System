@@ -162,7 +162,7 @@ def mark_activity_complete(course_id, activity_id):
         if not firebase_uid:
             return jsonify({"error": "Unauthorized"}), 401
         
-        print(f"Marking activity {activity_id} as complete for user {firebase_uid}")
+        print(f"Marking activity {activity_id} (cmid) complete for user {firebase_uid} in course {course_id}")
         
         # Mark activity as complete
         success = ProgressService.mark_activity_complete(firebase_uid, course_id, activity_id)

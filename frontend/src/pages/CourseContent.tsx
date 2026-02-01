@@ -1,9 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import ModuleDetailsModal from '../components/ModuleDetailsModal';
 import AssignmentDetailsModal from '../components/AssignmentDetailsModal';
-import { ProgressBar } from '../components/ProgressBar';
 import { MarkAsDoneButton } from '../components/MarkAsDoneButton';
 import { getCourseContents, getCourseAssignments } from '../services/moodleService';
 import { progressService, CourseProgress } from '../services/progressService';
@@ -158,19 +157,12 @@ export default function CourseContent() {
   };
 
   const handleActivityComplete = async (activityId: number) => {
+    // Progress now comes directly from Moodle completion status
+    // No local marking needed - just refresh to see Moodle's state
     try {
-      const success = await progressService.markActivityComplete(Number(id), activityId);
-      if (success) {
-        // Update completions state
-        setCompletions(prev => ({
-          ...prev,
-          [String(activityId)]: true
-        }));
-        // Refresh backend-computed progress (includes Moodle + user completions)
-        fetchCourseProgress();
-      }
+      fetchCourseProgress();
     } catch (err) {
-      console.error('Failed to mark activity as complete:', err);
+      console.error('Failed to refresh progress:', err);
     }
   };
 
@@ -191,18 +183,8 @@ export default function CourseContent() {
     return allModules.reduce((sum, m) => sum + (m.files?.length || 0), 0);
   }, [allModules]);
 
-  // Calculate activities done count (including both modules and assignments)
-  const activitiesDone = useMemo(() => {
-    const modulesDone = allModules.filter(m => completions[String(m.id)]).length;
-    const assignmentsDone = assignments.filter(a => 
-      completions[String(a.module_id || a.id)] || a.status === 'submitted'
-    ).length;
-    return modulesDone + assignmentsDone;
-  }, [completions, allModules, assignments]);
-
-  const totalActivities = useMemo(() => {
-    return allModules.length + assignments.length;
-  }, [allModules, assignments]);
+  // Progress now comes from backend (Moodle native data only)
+  const computedProgressPercent = progress ? progress.progress : 0;
 
   const toggleSection = (sectionId: string) => {
     setOpenSections((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }));
@@ -244,9 +226,8 @@ export default function CourseContent() {
                       <TrendingUp size={16} className="text-[#1ABC9C]" />
                       <p className="text-xs text-gray-600 dark:text-gray-400 font-semibold">Course Progress</p>
                     </div>
-                    <p className="text-lg font-bold text-[#1ABC9C]">{progress.progress.toFixed(1)}%</p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">{progress.completed}/{progress.total} completed</p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Activities: {activitiesDone}/{totalActivities}</p>
+                    <p className="text-lg font-bold text-[#1ABC9C]">{computedProgressPercent}%</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Activities: {progress?.completed || 0}/{progress?.total || 0}</p>
                   </div>
                 ) : (
                   <div className="text-right">
@@ -434,13 +415,10 @@ export default function CourseContent() {
                                               </p>
                                             </div>
                                             <div onClick={(e) => e.stopPropagation()}>
-                                              <MarkAsDoneButton
-                                                activityId={mod.id}
-                                                courseId={Number(id)}
-                                                isComplete={completions[String(mod.id)] || false}
-                                                onComplete={handleActivityComplete}
-                                                size="sm"
-                                              />
+                                              {/* Progress now tracked via Moodle native completion */}
+                                              <div className="text-xs text-gray-600 dark:text-gray-400 px-2 py-1 rounded bg-gray-100 dark:bg-[#1A1C20]">
+                                                {completions[String(mod.id)] ? '✓ Done' : 'Pending'}
+                                              </div>
                                             </div>
                                           </div>
 

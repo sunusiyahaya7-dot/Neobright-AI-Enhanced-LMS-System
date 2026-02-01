@@ -405,7 +405,7 @@ class MoodleService:
                 "userid": moodle_user_id
             }
             
-            response = requests.get(url, params=params, timeout=10)
+            response = MoodleService._request("GET", url, params=params, timeout=10)
             response.raise_for_status()
             
             data = response.json()
@@ -448,7 +448,7 @@ class MoodleService:
                 "userid": moodle_user_id
             }
             
-            response = requests.get(url, params=params, timeout=10)
+            response = MoodleService._request("GET", url, params=params, timeout=10)
             response.raise_for_status()
             
             data = response.json()
