@@ -4,6 +4,7 @@ from flask import Blueprint, jsonify, g, current_app, request
 from auth.firebase_auth import firebase_required
 from services.moodle_service import MoodleService
 from services.firestore_service import FirestoreService
+from services.grade_cache_service import GradeCacheService
 
 materials_bp = Blueprint("materials", __name__, url_prefix="/api/courses")
 
@@ -259,17 +260,78 @@ def get_submission_details(course_id: int, assignment_id: int):
     
     Returns:
     - Submission status (draft, submitted, etc.)
-    - Grade and grading information
-    - Teacher feedback/comments
+    - Grade and grading information (from Firestore cache)
+    - Teacher feedback/comments (from cache)
     - Whether student can edit/delete submission
     """
     try:
         user_id = g.firebase_uid
         print(f"Fetching submission details - User: {user_id}, Course: {course_id}, Assignment: {assignment_id}")
         
-        # Fetch submission status from Moodle
-        submission_status = MoodleService.get_submission_status(assignment_id)
-        print(f"Retrieved submission details: {submission_status}")
+        # Try to get cached grade first
+        cached_grade = GradeCacheService.get_cached_grade(user_id, course_id, assignment_id)
+        
+        if cached_grade:
+            # Use cached grade data
+            print(f"Using cached grade for assignment {assignment_id}")
+            grade_raw = cached_grade.get("grade")
+            grade_max = cached_grade.get("gradeMax") or 100
+            gradeddate = cached_grade.get("gradeddate")
+            feedback_text = cached_grade.get("feedback")
+
+            gradefordisplay = None
+            if grade_raw is not None:
+                gradefordisplay = f"{grade_raw}/{grade_max}"
+
+            submission_status = {
+                "submission": {
+                    "status": "submitted",
+                    "graderaw": grade_raw,
+                    "gradeddate": gradeddate,
+                },
+                "feedback": {
+                    "gradefordisplay": gradefordisplay,
+                    "gradeddate": gradeddate,
+                    "plugins": [
+                        {
+                            "type": "comments",
+                            "editorfields": [
+                                {"text": feedback_text}
+                            ] if feedback_text else []
+                        }
+                    ] if feedback_text else []
+                }
+            }
+        else:
+            # Fall back to fetching from Moodle (but this might fail)
+            print(f"No cached grade, attempting Moodle fetch for assignment {assignment_id}")
+            submission_status = MoodleService.get_submission_status(assignment_id)
+            print(f"Retrieved submission details from Moodle: {submission_status}")
+            
+            # Cache the result if we got data
+            if submission_status and submission_status.get("submission"):
+                grade_data = {
+                    "grade": submission_status.get("submission", {}).get("graderaw"),
+                    "gradeMax": 100,
+                    "feedback": None,
+                    "gradeddate": submission_status.get("submission", {}).get("gradeddate")
+                }
+                
+                # Extract feedback if available
+                feedback_info = submission_status.get("feedback", {})
+                if isinstance(feedback_info, dict):
+                    plugins = feedback_info.get("plugins", [])
+                    for plugin in plugins:
+                        if plugin.get("type") == "comments":
+                            editor_fields = plugin.get("editorfields", [])
+                            if editor_fields:
+                                grade_data["feedback"] = editor_fields[0].get("text")
+                                break
+                
+                try:
+                    GradeCacheService.cache_grade(user_id, course_id, assignment_id, grade_data)
+                except Exception as cache_err:
+                    print(f"Error caching grade: {cache_err}")
         
         return jsonify({
             "success": True,

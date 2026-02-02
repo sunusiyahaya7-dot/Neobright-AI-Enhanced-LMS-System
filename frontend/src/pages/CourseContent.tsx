@@ -156,7 +156,7 @@ export default function CourseContent() {
     }
   };
 
-  const handleActivityComplete = async (activityId: number) => {
+  const handleActivityComplete = async () => {
     // Refresh both progress and completions from Moodle
     try {
       await Promise.all([
@@ -413,7 +413,7 @@ export default function CourseContent() {
                                               </p>
                                               <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
                                                 {mod.modname || 'resource'} • {(mod.files || []).length} files
-                                                {processed ? ' • 💡 AI-ready' : ''}
+                                                {processed ? ' •  AI-ready' : ''}
                                               </p>
                                             </div>
                                             <div onClick={(e) => e.stopPropagation()}>
@@ -462,7 +462,7 @@ export default function CourseContent() {
                                           {processed && (processed.summaries?.length || 0) > 0 ? (
                                             <div className="mt-4 pt-4 border-t border-gray-200 dark:border-[#2A2D32]">
                                               <p className="text-xs font-semibold text-[#1E5BF0] mb-2 flex items-center gap-1">
-                                                💡 AI Summaries
+                                                AI Summaries
                                               </p>
                                               <div className="space-y-2">
                                                 {processed.summaries?.slice(0, 2).map((s, idx) => (

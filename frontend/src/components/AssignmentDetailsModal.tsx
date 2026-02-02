@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, Download, FileText, Calendar, Upload, MessageSquare, Award, RotateCcw, Trash2, AlertCircle, Loader } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { submitAssignment, getSubmissionDetails, deleteSubmission } from '../services/moodleService';
+import { gradeCacheService } from '../services/gradeCacheService';
 
 interface ModuleFile {
   filename?: string;
@@ -25,6 +26,9 @@ interface SubmissionDetail {
       type?: string;
       name?: string;
       output?: string;
+      editorfields?: Array<{
+        text?: string;
+      }>;
     }>;
   };
   canstudentmanageownsubmission?: boolean;
@@ -60,12 +64,43 @@ export default function AssignmentDetailsModal({ isOpen, onClose, assignment, co
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [showSubmitForm, setShowSubmitForm] = useState(false);
 
+  // In React 18 dev mode with StrictMode, effects may run twice. This prevents
+  // duplicate grade sync + details fetch spam when opening the modal.
+  const lastLoadedKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      lastLoadedKeyRef.current = null;
+    }
+  }, [isOpen]);
+
   // Load submission details when modal opens or assignment changes
   useEffect(() => {
     if (isOpen && assignment?.assignment_id) {
-      loadSubmissionDetails();
+      const key = `${courseId}:${assignment.assignment_id}`;
+      if (lastLoadedKeyRef.current === key) {
+        return;
+      }
+      lastLoadedKeyRef.current = key;
+
+      loadAndSyncDetails();
     }
   }, [isOpen, assignment?.assignment_id]);
+
+  const loadAndSyncDetails = async () => {
+    // First sync grades, then load details
+    try {
+      console.log('Syncing grades...');
+      await gradeCacheService.syncCourseGrades(courseId);
+      console.log('Grades synced successfully');
+    } catch (error) {
+      console.error('Grade sync failed (non-critical, will use cache):', error);
+      // Continue anyway - details will load from cache
+    }
+    
+    // Now load submission details
+    await loadSubmissionDetails();
+  };
 
   const loadSubmissionDetails = async () => {
     if (!assignment?.assignment_id) return;
@@ -247,7 +282,9 @@ export default function AssignmentDetailsModal({ isOpen, onClose, assignment, co
                       <Award size={14} />
                       Grading Status
                     </p>
-                    {submissionDetails?.feedback?.gradefordisplay ? (
+                    {isLoadingDetails ? (
+                      <p className="text-sm text-gray-600 dark:text-gray-400">Loading grading information...</p>
+                    ) : submissionDetails?.feedback?.gradefordisplay ? (
                       <>
                         <p className="text-lg font-bold text-green-600 dark:text-green-400">
                           Graded
@@ -255,7 +292,7 @@ export default function AssignmentDetailsModal({ isOpen, onClose, assignment, co
                         <p className="text-sm font-semibold text-green-700 dark:text-green-300 mt-2">
                           Grade: {decodeHtml(submissionDetails.feedback.gradefordisplay)}
                         </p>
-                        {submissionDetails.feedback.gradeddate && (
+                        {submissionDetails?.feedback?.gradeddate && (
                           <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
                             {new Date(submissionDetails.feedback.gradeddate * 1000).toLocaleDateString()}
                           </p>
@@ -340,7 +377,7 @@ export default function AssignmentDetailsModal({ isOpen, onClose, assignment, co
                       Teacher Feedback
                     </h3>
                     
-                    {/* Feedback from plugins */}
+                    {/* Feedback from plugins (teacher comments) */}
                     {submissionDetails.feedback.plugins && submissionDetails.feedback.plugins.length > 0 ? (
                       <div className="space-y-3">
                         {submissionDetails.feedback.plugins.map((plugin, idx) => {
