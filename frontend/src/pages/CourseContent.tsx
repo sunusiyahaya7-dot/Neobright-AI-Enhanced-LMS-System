@@ -4,7 +4,7 @@ import Layout from '../components/Layout';
 import ModuleDetailsModal from '../components/ModuleDetailsModal';
 import AssignmentDetailsModal from '../components/AssignmentDetailsModal';
 import { MarkAsDoneButton } from '../components/MarkAsDoneButton';
-import { getCourseContents, getCourseAssignments } from '../services/moodleService';
+import { getCourseContents, getCourseAssignments, getQuizzes } from '../services/moodleService';
 import { progressService, CourseProgress } from '../services/progressService';
 import {
   ChevronDown,
@@ -53,6 +53,28 @@ interface CourseAssignment {
   submitted_at?: string;
 }
 
+interface CourseQuiz {
+  id: number;
+  cmid?: number;
+  name?: string;
+  intro?: string;
+  timeopen?: number;
+  timeclose?: number;
+  timelimit?: number;
+  attempts?: number;
+  grade?: number;
+  access_info?: {
+    canstudentreview?: boolean;
+    canreviewresponses?: boolean;
+  };
+  user_attempts?: Array<{
+    id: number;
+    state?: string;
+    timefinish?: number;
+  }>;
+  attempt_count?: number;
+}
+
 interface CourseSection {
   section_id?: number;
   section_name?: string;
@@ -74,6 +96,7 @@ export default function CourseContent() {
   const [activeTab, setActiveTab] = useState<'modules' | 'assignments' | 'quizzes' | 'grades'>('modules');
   const [sections, setSections] = useState<CourseSection[]>([]);
   const [assignments, setAssignments] = useState<CourseAssignment[]>([]);
+  const [quizzes, setQuizzes] = useState<CourseQuiz[]>([]);
   const [processedMap, setProcessedMap] = useState<Record<string, ProcessedModule>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -94,12 +117,16 @@ export default function CourseContent() {
   const fetchCourseContent = async () => {
     try {
       setLoading(true);
-      const [materialsData, assignmentsData] = await Promise.all([
+      const [materialsData, assignmentsData, quizzesData] = await Promise.all([
         getCourseContents(Number(id)),
         getCourseAssignments(Number(id)).catch((err) => {
           console.error('Failed to fetch assignments:', err);
           return { assignments: [] };
-        })
+        }),
+        getQuizzes(Number(id)).catch((err) => {
+          console.error('Failed to fetch quizzes:', err);
+          return { quizzes: [] };
+        }),
       ]);
 
       console.log('Assignments data received:', assignmentsData);
@@ -107,11 +134,13 @@ export default function CourseContent() {
       const rawSections: CourseSection[] = materialsData?.moodle_sections || [];
       const processed: Record<string, ProcessedModule> = materialsData?.processed || {};
       const courseAssignments: CourseAssignment[] = assignmentsData?.assignments || [];
+      const courseQuizzes: CourseQuiz[] = quizzesData?.quizzes || [];
 
       console.log('Course assignments parsed:', courseAssignments);
 
       setSections(rawSections);
       setAssignments(courseAssignments);
+      setQuizzes(courseQuizzes);
       setProcessedMap(processed);
 
       // Default: expand the first section that has modules.
@@ -255,7 +284,7 @@ export default function CourseContent() {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* Main */}
               <div className="lg:col-span-2">
-                {/* Tabs */}
+                {/* Tabs */}`Quizzes (${quizzes.length})`
                 <div className="bg-white dark:bg-[#1A1C20] rounded-2xl p-3 shadow-sm dark:shadow-none border border-transparent dark:border-[#2A2D32]">
                   <div className="flex gap-2 overflow-x-auto">
                     {(
@@ -333,6 +362,100 @@ export default function CourseContent() {
                             )}
                           </div>
                         ))
+                      )}
+                    </div>
+                  ) : activeTab === 'quizzes' ? (
+                    <div className="space-y-4">
+                      {quizzes.length === 0 ? (
+                        <div className="bg-white dark:bg-[#1A1C20] rounded-2xl p-10 shadow-sm dark:shadow-none border border-transparent dark:border-[#2A2D32] text-center">
+                          <FileText className="mx-auto text-gray-400" size={48} />
+                          <h4 className="mt-4 text-lg font-semibold text-gray-900 dark:text-white">
+                            No quizzes
+                          </h4>
+                          <p className="mt-2 text-gray-600 dark:text-gray-400">
+                            This course has no quizzes yet.
+                          </p>
+                        </div>
+                      ) : (
+                        quizzes.map((quiz) => {
+                          const isOpen = !quiz.timeopen || quiz.timeopen <= Date.now() / 1000;
+                          const isClosed = quiz.timeclose && quiz.timeclose <= Date.now() / 1000;
+                          const canAttempt = isOpen && !isClosed && quiz.access_info?.canstudentreview !== false;
+                          const hasAttempted = (quiz.user_attempts?.length || 0) > 0;
+                          
+                          return (
+                            <div
+                              key={quiz.id}
+                              className="bg-white dark:bg-[#1A1C20] rounded-2xl p-6 shadow-sm dark:shadow-none border border-transparent dark:border-[#2A2D32] hover:border-[#1E5BF0] dark:hover:border-[#2C7CF0] hover:shadow-md transition-all"
+                            >
+                              <div className="flex items-start justify-between gap-4 mb-3">
+                                <div className="flex-1">
+                                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                                    {quiz.name}
+                                  </h3>
+                                </div>
+                                <div className="flex items-center gap-2 flex-shrink-0">
+                                  <span className={`px-3 py-1 text-xs font-semibold rounded-lg ${
+                                    isClosed
+                                      ? 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
+                                      : canAttempt
+                                      ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                                      : 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400'
+                                  }`}>
+                                    {isClosed ? 'Closed' : canAttempt ? 'Available' : 'Not yet open'}
+                                  </span>
+                                </div>
+                              </div>
+                              
+                              {quiz.intro && (
+                                <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+                                  {quiz.intro.replace(/<[^>]*>/g, '')}
+                                </p>
+                              )}
+                              
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4 text-sm">
+                                {quiz.timelimit && (
+                                  <div className="bg-gray-50 dark:bg-[#111418] rounded-lg p-2">
+                                    <p className="text-xs text-gray-600 dark:text-gray-400">Time Limit</p>
+                                    <p className="font-semibold text-gray-900 dark:text-white">{Math.floor(quiz.timelimit / 60)}m</p>
+                                  </div>
+                                )}
+                                {quiz.grade && (
+                                  <div className="bg-gray-50 dark:bg-[#111418] rounded-lg p-2">
+                                    <p className="text-xs text-gray-600 dark:text-gray-400">Grade</p>
+                                    <p className="font-semibold text-gray-900 dark:text-white">{quiz.grade} pts</p>
+                                  </div>
+                                )}
+                                {quiz.attempts !== null && (
+                                  <div className="bg-gray-50 dark:bg-[#111418] rounded-lg p-2">
+                                    <p className="text-xs text-gray-600 dark:text-gray-400">Attempts</p>
+                                    <p className="font-semibold text-gray-900 dark:text-white">{quiz.attempts === 0 ? 'Unlimited' : quiz.attempts}</p>
+                                  </div>
+                                )}
+                                {hasAttempted && (
+                                  <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-2">
+                                    <p className="text-xs text-green-600 dark:text-green-400">Attempts Done</p>
+                                    <p className="font-semibold text-green-700 dark:text-green-300">{quiz.attempt_count}</p>
+                                  </div>
+                                )}
+                              </div>
+                              
+                              {quiz.timeopen && (
+                                <p className="text-xs text-gray-600 dark:text-gray-400 mb-4">
+                                  Open: {new Date(quiz.timeopen * 1000).toLocaleDateString()}
+                                  {quiz.timeclose && ` - Close: ${new Date(quiz.timeclose * 1000).toLocaleDateString()}`}
+                                </p>
+                              )}
+                              
+                              <button
+                                onClick={() => window.open(`/mod/quiz/view.php?id=${quiz.cmid}`, '_blank')}
+                                className="w-full px-4 py-2 bg-[#1E5BF0] hover:bg-[#184AD0] text-white text-sm font-medium rounded-lg transition-colors"
+                              >
+                                {hasAttempted ? 'Review & Retry' : canAttempt ? 'Attempt Quiz' : 'View Details'}
+                              </button>
+                            </div>
+                          );
+                        })
                       )}
                     </div>
                   ) : activeTab !== 'modules' ? (

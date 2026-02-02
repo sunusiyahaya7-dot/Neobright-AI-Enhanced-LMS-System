@@ -93,6 +93,22 @@ export const getSubmissionDetails = async (courseId: number, assignmentId: numbe
 };
 
 /**
+ * Fetch all quizzes for a course
+ */
+export const getQuizzes = async (courseId: number) => {
+  const res = await api.get(`/courses/${courseId}/quizzes`);
+  return res.data;
+};
+
+/**
+ * Fetch details for a specific quiz
+ */
+export const getQuizDetails = async (courseId: number, quizId: number) => {
+  const res = await api.get(`/courses/${courseId}/quizzes/${quizId}`);
+  return res.data;
+};
+
+/**
  * Delete a submission from Moodle and Firestore
  */
 export const deleteSubmission = async (courseId: number, assignmentId: number) => {
