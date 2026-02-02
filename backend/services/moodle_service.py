@@ -4,6 +4,52 @@ from flask import current_app
 
 class MoodleService:
     @staticmethod
+    def _safe_summary(obj):
+        """Return a small, non-PII summary of common Moodle payloads."""
+        try:
+            if isinstance(obj, dict):
+                # Grades payload
+                if "usergrades" in obj:
+                    usergrades = obj.get("usergrades") or []
+                    first = usergrades[0] if isinstance(usergrades, list) and usergrades else {}
+                    gradeitems = (first.get("gradeitems") or []) if isinstance(first, dict) else []
+                    assign_items = [i for i in gradeitems if isinstance(i, dict) and i.get("itemmodule") == "assign"]
+                    return {
+                        "type": "grades",
+                        "usergrades": len(usergrades) if isinstance(usergrades, list) else 0,
+                        "gradeitems": len(gradeitems) if isinstance(gradeitems, list) else 0,
+                        "assign_items": len(assign_items),
+                        "warnings": len(obj.get("warnings") or []),
+                        "has_exception": "exception" in obj,
+                    }
+
+                # Completion/progress payload
+                if "statuses" in obj:
+                    statuses = obj.get("statuses") or []
+                    return {
+                        "type": "completion",
+                        "statuses": len(statuses) if isinstance(statuses, list) else 0,
+                        "warnings": len(obj.get("warnings") or []),
+                        "has_exception": "exception" in obj,
+                    }
+
+                # Generic Moodle error-ish payload
+                if "exception" in obj:
+                    return {
+                        "type": "moodle_error",
+                        "exception": obj.get("exception"),
+                        "errorcode": obj.get("errorcode"),
+                    }
+
+                return {"type": "dict", "keys": list(obj.keys())[:20]}
+
+            if isinstance(obj, list):
+                return {"type": "list", "len": len(obj)}
+
+            return {"type": type(obj).__name__}
+        except Exception:
+            return {"type": "unknown"}
+    @staticmethod
     def _get_request_headers() -> dict:
         """Headers used for Moodle requests.
 
@@ -409,7 +455,7 @@ class MoodleService:
             response.raise_for_status()
             
             data = response.json()
-            print(f"Progress response: {data}")
+            print(f"Progress response summary: {MoodleService._safe_summary(data)}")
             
             # Check for Moodle errors
             if isinstance(data, dict) and "exception" in data:
@@ -452,7 +498,7 @@ class MoodleService:
             response.raise_for_status()
             
             data = response.json()
-            print(f"Grades response: {data}")
+            print(f"Grades response summary: {MoodleService._safe_summary(data)}")
             
             # Check for Moodle errors
             if isinstance(data, dict) and "exception" in data:
