@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { gradeCacheService } from '../services/gradeCacheService';
-import { AlertCircle, BookOpen, Loader2, TrendingUp } from 'lucide-react';
+import { AlertCircle, BookOpen, Loader2, TrendingUp, TrendingDown } from 'lucide-react';
 
 interface Grade {
   grade: number | null;
   gradeMax: number;
   feedback: string | null;
   gradeddate: number | null;
+  assignmentName?: string;
 }
 
 interface GradesData {
@@ -22,6 +23,17 @@ interface GradesData {
 const stripHtmlTags = (html: string): string => {
   if (!html) return '';
   return html.replace(/<[^>]*>/g, '').trim();
+};
+
+// Get trending icon based on average grade percentage
+const getTrendingIcon = (percentage: number) => {
+  if (percentage >= 75) {
+    return { Icon: TrendingUp, color: 'text-green-500' };
+  } else if (percentage >= 50) {
+    return { Icon: TrendingUp, color: 'text-yellow-500' };
+  } else {
+    return { Icon: TrendingDown, color: 'text-red-500' };
+  }
 };
 
 export default function Grades() {
@@ -208,9 +220,14 @@ export default function Grades() {
                         </span>
                       </div>
                     </div>
-                    <div className="bg-[#1E5BF0]/10 dark:bg-[#1E5BF0]/20 p-4 rounded-2xl">
-                      <TrendingUp className="text-[#1E5BF0]" size={24} />
-                    </div>
+                    {(() => {
+                      const { Icon, color } = getTrendingIcon(stats.average);
+                      return (
+                        <div className={`p-4 rounded-2xl ${stats.average >= 75 ? 'bg-green-500/10' : stats.average >= 50 ? 'bg-yellow-500/10' : 'bg-red-500/10'}`}>
+                          <Icon className={color} size={24} />
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -293,7 +310,7 @@ export default function Grades() {
                           >
                             <td className="px-6 py-4">
                               <p className="font-medium text-gray-900 dark:text-white">
-                                Assignment {assignmentId}
+                                {grade.assignmentName || `Assignment ${assignmentId}`}
                               </p>
                             </td>
                             <td className="px-6 py-4">

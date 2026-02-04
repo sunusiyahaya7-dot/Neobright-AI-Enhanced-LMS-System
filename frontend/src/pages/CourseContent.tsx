@@ -285,7 +285,7 @@ export default function CourseContent() {
                 {/* Content */}
                 <div className="mt-6">
                   {activeTab === 'grades' ? (
-                    <GradesContent courseId={Number(id)} assignments={assignments} />
+                    <GradesContent courseId={Number(id)} />
                   ) : activeTab === 'assignments' ? (
                     <div className="space-y-4">
                       {assignments.length === 0 ? (
@@ -502,7 +502,7 @@ export default function CourseContent() {
                       ✦
                     </div>
                     <div>
-                      <p className="font-bold text-gray-900 dark:text-white">Brighten AI</p>
+                      <p className="font-bold text-gray-900 dark:text-white">NeoBright AI</p>
                       <p className="text-xs text-gray-600 dark:text-gray-400">Course Assistant</p>
                     </div>
                   </div>

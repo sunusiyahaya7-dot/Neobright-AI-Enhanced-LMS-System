@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { gradeCacheService } from '../services/gradeCacheService';
-import { AlertCircle, BookOpen, Loader2, TrendingUp } from 'lucide-react';
+import { AlertCircle, BookOpen, Loader2, TrendingUp, TrendingDown } from 'lucide-react';
 
 interface Grade {
   grade: number | null;
   gradeMax: number;
   feedback: string | null;
   gradeddate: number | null;
+  assignmentName?: string;
 }
 
 interface GradesData {
@@ -16,15 +17,8 @@ interface GradesData {
   grades: Record<string, Grade>;
 }
 
-interface CourseAssignment {
-  id: number;
-  name?: string;
-  [key: string]: any;
-}
-
 interface GradesContentProps {
   courseId: number;
-  assignments?: CourseAssignment[];
 }
 
 // Utility function to strip HTML tags from text
@@ -33,21 +27,22 @@ const stripHtmlTags = (html: string): string => {
   return html.replace(/<[^>]*>/g, '').trim();
 };
 
-// Create a mapping of assignment ID to assignment name
-const createAssignmentMap = (assignments: CourseAssignment[] | undefined): Record<number, string> => {
-  if (!assignments) return {};
-  return assignments.reduce((map, assignment) => {
-    map[assignment.id] = assignment.name || `Assignment ${assignment.id}`;
-    return map;
-  }, {} as Record<number, string>);
+// Get trending icon based on average grade percentage
+const getTrendingIcon = (percentage: number) => {
+  if (percentage >= 75) {
+    return { Icon: TrendingUp, color: 'text-green-500' };
+  } else if (percentage >= 50) {
+    return { Icon: TrendingUp, color: 'text-yellow-500' };
+  } else {
+    return { Icon: TrendingDown, color: 'text-red-500' };
+  }
 };
 
-export default function GradesContent({ courseId, assignments }: GradesContentProps) {
+export default function GradesContent({ courseId }: GradesContentProps) {
   const [grades, setGrades] = useState<GradesData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [syncing, setSyncing] = useState(false);
-  const assignmentMap = createAssignmentMap(assignments);
 
   useEffect(() => {
     // Auto-sync grades on component mount
@@ -210,9 +205,14 @@ export default function GradesContent({ courseId, assignments }: GradesContentPr
                 </span>
               </div>
             </div>
-            <div className="bg-[#1E5BF0]/10 dark:bg-[#1E5BF0]/20 p-4 rounded-2xl">
-              <TrendingUp className="text-[#1E5BF0]" size={24} />
-            </div>
+            {(() => {
+              const { Icon, color } = getTrendingIcon(stats.average);
+              return (
+                <div className={`p-4 rounded-2xl ${stats.average >= 75 ? 'bg-green-500/10' : stats.average >= 50 ? 'bg-yellow-500/10' : 'bg-red-500/10'}`}>
+                  <Icon className={color} size={24} />
+                </div>
+              );
+            })()}
           </div>
         </div>
 
@@ -295,7 +295,7 @@ export default function GradesContent({ courseId, assignments }: GradesContentPr
                   >
                     <td className="px-6 py-4">
                       <p className="font-medium text-gray-900 dark:text-white">
-                        {assignmentMap[Number(assignmentId)] || `Assignment ${assignmentId}`}
+                        {grade.assignmentName || `Assignment ${assignmentId}`}
                       </p>
                     </td>
                     <td className="px-6 py-4">
