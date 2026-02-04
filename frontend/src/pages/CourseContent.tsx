@@ -285,7 +285,7 @@ export default function CourseContent() {
                 {/* Content */}
                 <div className="mt-6">
                   {activeTab === 'grades' ? (
-                    <GradesContent courseId={Number(id)} />
+                    <GradesContent courseId={Number(id)} assignments={assignments} />
                   ) : activeTab === 'assignments' ? (
                     <div className="space-y-4">
                       {assignments.length === 0 ? (

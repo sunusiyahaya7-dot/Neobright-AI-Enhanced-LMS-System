@@ -16,19 +16,66 @@ interface GradesData {
   grades: Record<string, Grade>;
 }
 
-interface GradesContentProps {
-  courseId: number;
+interface CourseAssignment {
+  id: number;
+  name?: string;
+  [key: string]: any;
 }
 
-export default function GradesContent({ courseId }: GradesContentProps) {
+interface GradesContentProps {
+  courseId: number;
+  assignments?: CourseAssignment[];
+}
+
+// Utility function to strip HTML tags from text
+const stripHtmlTags = (html: string): string => {
+  if (!html) return '';
+  return html.replace(/<[^>]*>/g, '').trim();
+};
+
+// Create a mapping of assignment ID to assignment name
+const createAssignmentMap = (assignments: CourseAssignment[] | undefined): Record<number, string> => {
+  if (!assignments) return {};
+  return assignments.reduce((map, assignment) => {
+    map[assignment.id] = assignment.name || `Assignment ${assignment.id}`;
+    return map;
+  }, {} as Record<number, string>);
+};
+
+export default function GradesContent({ courseId, assignments }: GradesContentProps) {
   const [grades, setGrades] = useState<GradesData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [syncing, setSyncing] = useState(false);
+  const assignmentMap = createAssignmentMap(assignments);
 
   useEffect(() => {
-    fetchGrades();
+    // Auto-sync grades on component mount
+    syncAndFetchGrades();
   }, [courseId]);
+
+  const syncAndFetchGrades = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      // Auto-sync first
+      await gradeCacheService.syncCourseGrades(courseId);
+      // Then fetch the updated grades
+      const response = await gradeCacheService.getAllCachedGrades(courseId);
+      setGrades(response);
+    } catch (err) {
+      console.error('Failed to sync/fetch grades:', err);
+      // Fallback to just fetching cached grades if sync fails
+      try {
+        const response = await gradeCacheService.getAllCachedGrades(courseId);
+        setGrades(response);
+      } catch (fetchErr) {
+        setError('Unable to load grades. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const fetchGrades = async () => {
     try {
@@ -44,7 +91,7 @@ export default function GradesContent({ courseId }: GradesContentProps) {
     }
   };
 
-  const handleSyncGrades = async () => {
+  const handleManualSync = async () => {
     try {
       setSyncing(true);
       setError('');
@@ -56,7 +103,7 @@ export default function GradesContent({ courseId }: GradesContentProps) {
       }
     } catch (err) {
       console.error('Failed to sync grades:', err);
-      setError('Failed to sync grades. Cache will be used.');
+      setError('Failed to sync grades.');
       await fetchGrades();
     } finally {
       setSyncing(false);
@@ -133,7 +180,7 @@ export default function GradesContent({ courseId }: GradesContentProps) {
       {/* Action Button */}
       <div className="flex justify-end">
         <button
-          onClick={handleSyncGrades}
+          onClick={handleManualSync}
           disabled={syncing}
           className="px-6 py-2 bg-[#1E5BF0] text-white rounded-xl font-medium hover:bg-[#1847BC] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
         >
@@ -143,7 +190,7 @@ export default function GradesContent({ courseId }: GradesContentProps) {
               Syncing...
             </>
           ) : (
-            'Sync Grades'
+            'Refresh'
           )}
         </button>
       </div>
@@ -248,7 +295,7 @@ export default function GradesContent({ courseId }: GradesContentProps) {
                   >
                     <td className="px-6 py-4">
                       <p className="font-medium text-gray-900 dark:text-white">
-                        Assignment {assignmentId}
+                        {assignmentMap[Number(assignmentId)] || `Assignment ${assignmentId}`}
                       </p>
                     </td>
                     <td className="px-6 py-4">
@@ -300,7 +347,7 @@ export default function GradesContent({ courseId }: GradesContentProps) {
                       {grade.feedback ? (
                         <div className="max-w-xs">
                           <p className="text-sm text-gray-700 dark:text-gray-300 truncate">
-                            {grade.feedback}
+                            {stripHtmlTags(grade.feedback)}
                           </p>
                         </div>
                       ) : (
@@ -313,15 +360,6 @@ export default function GradesContent({ courseId }: GradesContentProps) {
             </tbody>
           </table>
         </div>
-      </div>
-
-      {/* Info Card */}
-      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-2xl p-4 flex items-start gap-3">
-        <AlertCircle className="text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" size={18} />
-        <p className="text-sm text-blue-800 dark:text-blue-300">
-          Grades are cached from Moodle. Click "Sync Grades" to refresh from the latest
-          submission data.
-        </p>
       </div>
     </div>
   );

@@ -18,6 +18,12 @@ interface GradesData {
   grades: Record<string, Grade>;
 }
 
+// Utility function to strip HTML tags from text
+const stripHtmlTags = (html: string): string => {
+  if (!html) return '';
+  return html.replace(/<[^>]*>/g, '').trim();
+};
+
 export default function Grades() {
   const { id } = useParams<{ id: string }>();
   const [grades, setGrades] = useState<GradesData | null>(null);
@@ -26,8 +32,34 @@ export default function Grades() {
   const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
-    fetchGrades();
+    // Auto-sync grades on component mount
+    syncAndFetchGrades();
   }, [id]);
+
+  const syncAndFetchGrades = async () => {
+    if (!id) return;
+
+    try {
+      setLoading(true);
+      setError('');
+      // Auto-sync first
+      await gradeCacheService.syncCourseGrades(Number(id));
+      // Then fetch the updated grades
+      const response = await gradeCacheService.getAllCachedGrades(Number(id));
+      setGrades(response);
+    } catch (err) {
+      console.error('Failed to sync/fetch grades:', err);
+      // Fallback to just fetching cached grades if sync fails
+      try {
+        const response = await gradeCacheService.getAllCachedGrades(Number(id));
+        setGrades(response);
+      } catch (fetchErr) {
+        setError('Unable to load grades. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const fetchGrades = async () => {
     if (!id) return;
@@ -45,7 +77,7 @@ export default function Grades() {
     }
   };
 
-  const handleSyncGrades = async () => {
+  const handleManualSync = async () => {
     if (!id) return;
 
     try {
@@ -53,15 +85,13 @@ export default function Grades() {
       setError('');
       const response = await gradeCacheService.syncCourseGrades(Number(id));
       if (response.success) {
-        // Refresh grades after sync
         await fetchGrades();
       } else {
         setError(response.message || 'Failed to sync grades');
       }
     } catch (err) {
       console.error('Failed to sync grades:', err);
-      setError('Failed to sync grades. Cache will be used.');
-      // Still refresh to show cached data
+      setError('Failed to sync grades.');
       await fetchGrades();
     } finally {
       setSyncing(false);
@@ -117,7 +147,7 @@ export default function Grades() {
                 </div>
               </div>
               <button
-                onClick={handleSyncGrades}
+                onClick={handleManualSync}
                 disabled={syncing}
                 className="px-6 py-2 bg-[#1E5BF0] text-white rounded-xl font-medium hover:bg-[#1847BC] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
               >
@@ -127,7 +157,7 @@ export default function Grades() {
                     Syncing...
                   </>
                 ) : (
-                  'Sync Grades'
+                  'Refresh'
                 )}
               </button>
             </div>
@@ -315,7 +345,7 @@ export default function Grades() {
                               {grade.feedback ? (
                                 <div className="max-w-xs">
                                   <p className="text-sm text-gray-700 dark:text-gray-300 truncate">
-                                    {grade.feedback}
+                                    {stripHtmlTags(grade.feedback)}
                                   </p>
                                 </div>
                               ) : (
@@ -328,15 +358,6 @@ export default function Grades() {
                     </tbody>
                   </table>
                 </div>
-              </div>
-
-              {/* Info Card */}
-              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-2xl p-4 flex items-start gap-3">
-                <AlertCircle className="text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" size={18} />
-                <p className="text-sm text-blue-800 dark:text-blue-300">
-                  Grades are cached from Moodle. Click "Sync Grades" to refresh from the latest
-                  submission data.
-                </p>
               </div>
             </div>
           )}
