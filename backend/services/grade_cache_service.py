@@ -30,6 +30,7 @@ class GradeCacheService:
                 - gradeMax: Maximum grade (int)
                 - feedback: Feedback text (string or null)
                 - gradeddate: Timestamp when graded (int or null)
+                - assignmentName: Name of the assignment (string, optional)
         """
         try:
             fs = FirestoreService()
@@ -42,6 +43,7 @@ class GradeCacheService:
                 "gradeMax": grade_data.get("gradeMax", 100),
                 "feedback": grade_data.get("feedback"),
                 "gradeddate": grade_data.get("gradeddate"),
+                "assignmentName": grade_data.get("assignmentName"),
                 "cached_at": datetime.utcnow(),
                 "synced_at": datetime.utcnow()
             }

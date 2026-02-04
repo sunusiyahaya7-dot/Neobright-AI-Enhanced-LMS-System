@@ -6,6 +6,7 @@ import AssignmentDetailsModal from '../components/AssignmentDetailsModal';
 import { MarkAsDoneButton } from '../components/MarkAsDoneButton';
 import { getCourseContents, getCourseAssignments } from '../services/moodleService';
 import { progressService, CourseProgress } from '../services/progressService';
+import GradesContent from '../components/GradesContent';
 import {
   ChevronDown,
   ChevronRight,
@@ -283,7 +284,9 @@ export default function CourseContent() {
 
                 {/* Content */}
                 <div className="mt-6">
-                  {activeTab === 'assignments' ? (
+                  {activeTab === 'grades' ? (
+                    <GradesContent courseId={Number(id)} />
+                  ) : activeTab === 'assignments' ? (
                     <div className="space-y-4">
                       {assignments.length === 0 ? (
                         <div className="bg-white dark:bg-[#1A1C20] rounded-2xl p-10 shadow-sm dark:shadow-none border border-transparent dark:border-[#2A2D32] text-center">
@@ -499,7 +502,7 @@ export default function CourseContent() {
                       ✦
                     </div>
                     <div>
-                      <p className="font-bold text-gray-900 dark:text-white">Brighten AI</p>
+                      <p className="font-bold text-gray-900 dark:text-white">NeoBright AI</p>
                       <p className="text-xs text-gray-600 dark:text-gray-400">Course Assistant</p>
                     </div>
                   </div>
