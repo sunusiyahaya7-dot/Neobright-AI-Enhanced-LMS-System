@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import Layout from '../components/Layout';
 import api from '../api/client';
-import { Lightbulb, Target, AlertTriangle, CheckCircle, Loader2, RefreshCw, Clock } from 'lucide-react';
+import { Lightbulb, Target, AlertTriangle, CheckCircle, Loader2, RefreshCw, Clock, Database } from 'lucide-react';
 
 interface AiActionItem {
   title: string;
@@ -19,18 +19,28 @@ interface AiInsights {
   risk_level: 'low' | 'medium' | 'high';
   confidence_score: number;
   generated_at: string;
+  cached?: boolean;
+  cache_expires_at?: string;
 }
 
 export default function AIInsights() {
   const [insights, setInsights] = useState<AiInsights | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchInsights = async () => {
+  const fetchInsights = async (forceRefresh = false) => {
     try {
-      setLoading(true);
+      if (forceRefresh) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
       setError(null);
-      const response = await api.get<AiInsights>('/ai/insights');
+      
+      // Add force=true param when manually refreshing
+      const url = forceRefresh ? '/ai/insights?force=true' : '/ai/insights';
+      const response = await api.get<AiInsights>(url);
       setInsights(response.data);
     } catch (err: any) {
       console.error('Failed to load AI insights:', err);
@@ -38,12 +48,30 @@ export default function AIInsights() {
       setError(message);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
   useEffect(() => {
-    fetchInsights();
+    fetchInsights(false); // Load cached on mount
   }, []);
+
+  const handleRefresh = () => {
+    fetchInsights(true); // Force regeneration
+  };
+
+  const getTimeAgo = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    
+    if (diffMins < 1) return 'just now';
+    if (diffMins < 60) return `${diffMins} min ago`;
+    if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+    return date.toLocaleDateString();
+  };
 
   const getPriorityColor = (priority: string) => {
     switch (priority) {
@@ -82,12 +110,13 @@ export default function AIInsights() {
             </div>
           </div>
           <button
-            onClick={fetchInsights}
-            disabled={loading}
+            onClick={handleRefresh}
+            disabled={loading || refreshing}
             className="flex items-center gap-2 px-4 py-2 bg-[#1E5BF0] text-white rounded-lg hover:bg-[#1a4fd0] transition-colors disabled:opacity-50"
+            title="Generate fresh insights (uses AI tokens)"
           >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
+            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+            {refreshing ? 'Generating...' : 'Regenerate'}
           </button>
         </div>
 
@@ -101,7 +130,7 @@ export default function AIInsights() {
             <AlertTriangle className="w-8 h-8 text-red-500 mx-auto mb-2" />
             <p className="text-red-600 dark:text-red-400">{error}</p>
             <button
-              onClick={fetchInsights}
+              onClick={() => fetchInsights(false)}
               className="mt-4 px-4 py-2 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors"
             >
               Try Again
@@ -123,7 +152,16 @@ export default function AIInsights() {
               <div className="mt-4 flex items-center gap-4 text-sm text-white/70">
                 <span>Confidence: {Math.round(insights.confidence_score * 100)}%</span>
                 <span>•</span>
-                <span>Generated: {new Date(insights.generated_at).toLocaleString()}</span>
+                <span>Generated: {getTimeAgo(insights.generated_at)}</span>
+                {insights.cached && (
+                  <>
+                    <span>•</span>
+                    <span className="flex items-center gap-1">
+                      <Database className="w-3 h-3" />
+                      Cached
+                    </span>
+                  </>
+                )}
               </div>
             </div>
 
