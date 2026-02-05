@@ -1,12 +1,16 @@
 """
 AI Routes for NeoBright LMS.
-Provides AI-related endpoints.
+Provides AI-related endpoints including chat functionality.
 """
-from flask import Blueprint, jsonify, g, current_app
+import uuid
+from datetime import datetime
+from flask import Blueprint, jsonify, g, current_app, request
 from auth.firebase_auth import firebase_required
 from services.ai_context_service import AIContextService
 from services.ai_service import AiService
 from services.ai_rate_limit_service import ai_rate_limit
+from services.firestore_service import FirestoreService
+from models.firestore_models import ChatMessage
 
 
 ai_bp = Blueprint('ai', __name__, url_prefix='/api')
@@ -102,3 +106,426 @@ def get_ai_insights():
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+
+# ==================== AI CHAT ENDPOINTS ====================
+
+@ai_bp.route('/ai/chats', methods=['POST'])
+@firebase_required
+def create_chat():
+    """
+    POST /api/ai/chats
+    
+    Create a new AI chat session.
+    
+    Request body:
+    {
+        "courseId": 5,  // optional - for course-specific chats
+        "title": "Help with Assignment 1"  // optional
+    }
+    
+    Returns:
+    {
+        "chatId": "uuid",
+        "title": "...",
+        "courseId": 5,
+        "createdAt": "..."
+    }
+    """
+    try:
+        firebase_uid = g.firebase_uid
+        body = request.get_json() or {}
+        
+        course_id = body.get("courseId")
+        title = body.get("title", "New Chat")
+        
+        # Generate unique chat ID
+        chat_id = str(uuid.uuid4())
+        
+        # Create chat document in Firestore
+        fs = FirestoreService()
+        chat_data = {
+            "chat_id": chat_id,
+            "user_id": firebase_uid,
+            "moodle_course_id": course_id,
+            "title": title,
+            "total_tokens": 0,
+            "model_used": current_app.config.get("AI_MODEL", "gpt-4o-mini"),
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        }
+        
+        fs.db.collection('ai_chats').document(chat_id).set(chat_data)
+        
+        return jsonify({
+            "chatId": chat_id,
+            "title": title,
+            "courseId": course_id,
+            "createdAt": chat_data["created_at"].isoformat()
+        }), 201
+    
+    except Exception as e:
+        print(f"Error creating chat: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@ai_bp.route('/ai/chats', methods=['GET'])
+@firebase_required
+def list_chats():
+    """
+    GET /api/ai/chats
+    
+    List all chat sessions for the current user.
+    
+    Query params:
+    - courseId: filter by course (optional)
+    
+    Returns:
+    {
+        "chats": [
+            {
+                "chatId": "...",
+                "title": "...",
+                "courseId": 5,
+                "createdAt": "...",
+                "updatedAt": "..."
+            }
+        ]
+    }
+    """
+    try:
+        firebase_uid = g.firebase_uid
+        course_id = request.args.get("courseId", type=int)
+        
+        fs = FirestoreService()
+        
+        # Query chats for user
+        query = fs.db.collection('ai_chats').where('user_id', '==', firebase_uid)
+        
+        if course_id:
+            query = query.where('moodle_course_id', '==', course_id)
+        
+        query = query.order_by('updated_at', direction='DESCENDING').limit(50)
+        
+        docs = query.stream()
+        
+        chats = []
+        for doc in docs:
+            data = doc.to_dict()
+            chats.append({
+                "chatId": data.get("chat_id"),
+                "title": data.get("title", "Chat"),
+                "courseId": data.get("moodle_course_id"),
+                "createdAt": data.get("created_at").isoformat() if data.get("created_at") else None,
+                "updatedAt": data.get("updated_at").isoformat() if data.get("updated_at") else None
+            })
+        
+        return jsonify({"chats": chats}), 200
+    
+    except Exception as e:
+        print(f"Error listing chats: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@ai_bp.route('/ai/chats/<chat_id>', methods=['GET'])
+@firebase_required
+def get_chat(chat_id: str):
+    """
+    GET /api/ai/chats/<chat_id>
+    
+    Get a specific chat with all messages.
+    
+    Returns:
+    {
+        "chatId": "...",
+        "title": "...",
+        "courseId": 5,
+        "messages": [
+            { "role": "user", "content": "...", "timestamp": "..." },
+            { "role": "assistant", "content": "...", "timestamp": "..." }
+        ]
+    }
+    """
+    try:
+        firebase_uid = g.firebase_uid
+        fs = FirestoreService()
+        
+        # Get chat document
+        chat_doc = fs.db.collection('ai_chats').document(chat_id).get()
+        
+        if not chat_doc.exists:
+            return jsonify({"error": "Chat not found"}), 404
+        
+        chat_data = chat_doc.to_dict()
+        
+        # Verify ownership
+        if chat_data.get("user_id") != firebase_uid:
+            return jsonify({"error": "Access denied"}), 403
+        
+        # Get messages
+        messages = fs.get_chat_messages(chat_id)
+        
+        # Format timestamps
+        formatted_messages = []
+        for msg in messages:
+            formatted_messages.append({
+                "role": msg.get("role"),
+                "content": msg.get("content"),
+                "timestamp": msg.get("timestamp").isoformat() if msg.get("timestamp") else None
+            })
+        
+        return jsonify({
+            "chatId": chat_id,
+            "title": chat_data.get("title", "Chat"),
+            "courseId": chat_data.get("moodle_course_id"),
+            "messages": formatted_messages
+        }), 200
+    
+    except Exception as e:
+        print(f"Error getting chat: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@ai_bp.route('/ai/chats/<chat_id>/messages', methods=['POST'])
+@firebase_required
+@ai_rate_limit
+def send_message(chat_id: str):
+    """
+    POST /api/ai/chats/<chat_id>/messages
+    
+    Send a message and get AI response.
+    
+    Request body:
+    {
+        "message": "Help me understand this concept..."
+    }
+    
+    Returns:
+    {
+        "userMessage": { "role": "user", "content": "...", "timestamp": "..." },
+        "assistantMessage": { "role": "assistant", "content": "...", "timestamp": "..." }
+    }
+    """
+    try:
+        from models.ai_models import StudentContext
+        
+        firebase_uid = g.firebase_uid
+        body = request.get_json() or {}
+        user_message_content = body.get("message", "").strip()
+        
+        if not user_message_content:
+            return jsonify({"error": "Message is required"}), 400
+        
+        fs = FirestoreService()
+        
+        # Verify chat exists and user owns it
+        chat_doc = fs.db.collection('ai_chats').document(chat_id).get()
+        
+        if not chat_doc.exists:
+            return jsonify({"error": "Chat not found"}), 404
+        
+        chat_data = chat_doc.to_dict()
+        
+        if chat_data.get("user_id") != firebase_uid:
+            return jsonify({"error": "Access denied"}), 403
+        
+        # Save user message
+        user_msg = ChatMessage(role="user", content=user_message_content)
+        fs.save_chat_message(chat_id, user_msg)
+        user_timestamp = datetime.utcnow()
+        
+        # Get student context for AI
+        context_dict = AIContextService.build_ai_context(firebase_uid)
+        
+        # Get previous messages for context (last 10)
+        previous_messages = fs.get_chat_messages(chat_id)
+        conversation_history = previous_messages[-10:] if len(previous_messages) > 10 else previous_messages
+        
+        # Generate AI response using chat-specific prompt
+        ai_response = _generate_chat_response(
+            user_message_content,
+            context_dict,
+            conversation_history,
+            chat_data.get("moodle_course_id"),
+            current_app.config
+        )
+        
+        # Save assistant message
+        assistant_msg = ChatMessage(role="assistant", content=ai_response)
+        fs.save_chat_message(chat_id, assistant_msg)
+        assistant_timestamp = datetime.utcnow()
+        
+        # Update chat timestamp
+        fs.db.collection('ai_chats').document(chat_id).update({
+            "updated_at": datetime.utcnow()
+        })
+        
+        return jsonify({
+            "userMessage": {
+                "role": "user",
+                "content": user_message_content,
+                "timestamp": user_timestamp.isoformat()
+            },
+            "assistantMessage": {
+                "role": "assistant",
+                "content": ai_response,
+                "timestamp": assistant_timestamp.isoformat()
+            }
+        }), 200
+    
+    except Exception as e:
+        print(f"Error sending message: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@ai_bp.route('/ai/chats/<chat_id>', methods=['DELETE'])
+@firebase_required
+def delete_chat(chat_id: str):
+    """
+    DELETE /api/ai/chats/<chat_id>
+    
+    Delete a chat session and all its messages.
+    """
+    try:
+        firebase_uid = g.firebase_uid
+        fs = FirestoreService()
+        
+        # Verify chat exists and user owns it
+        chat_doc = fs.db.collection('ai_chats').document(chat_id).get()
+        
+        if not chat_doc.exists:
+            return jsonify({"error": "Chat not found"}), 404
+        
+        chat_data = chat_doc.to_dict()
+        
+        if chat_data.get("user_id") != firebase_uid:
+            return jsonify({"error": "Access denied"}), 403
+        
+        # Delete all messages in subcollection
+        messages_ref = fs.db.collection('ai_chats').document(chat_id).collection('messages')
+        for msg_doc in messages_ref.stream():
+            msg_doc.reference.delete()
+        
+        # Delete chat document
+        fs.db.collection('ai_chats').document(chat_id).delete()
+        
+        return jsonify({"success": True, "message": "Chat deleted"}), 200
+    
+    except Exception as e:
+        print(f"Error deleting chat: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+def _generate_chat_response(
+    user_message: str,
+    context: dict,
+    conversation_history: list,
+    course_id: int | None,
+    app_config: dict
+) -> str:
+    """
+    Generate AI chat response using OpenAI.
+    
+    Includes student context and conversation history for personalized responses.
+    """
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return _fallback_chat_response(user_message)
+    
+    api_key = app_config.get("OPENAI_API_KEY")
+    if not api_key:
+        return _fallback_chat_response(user_message)
+    
+    # Build system prompt with student context
+    system_prompt = f"""You are NeoBright, a helpful AI learning assistant for university students.
+
+STUDENT CONTEXT:
+- Name: {context.get('student', {}).get('name', 'Student')}
+- Overall Progress: {context.get('analytics', {}).get('overallProgress', 0)}%
+- Risk Level: {context.get('analytics', {}).get('riskLevel', 'unknown')}
+- Enrolled Courses: {len(context.get('courses', []))}
+
+{_format_courses_context(context.get('courses', []), course_id)}
+
+GUIDELINES:
+- Be encouraging, supportive, and helpful
+- Provide specific, actionable advice
+- Reference the student's actual courses and progress when relevant
+- Keep responses concise but thorough
+- If asked about grades or progress, use the provided context
+- Never make up information not in the context
+- If asked anything that is not related to learning or courses, politely decline and steer back to academic topics
+- Always prioritize the student's learning and well-being
+- Current date: {datetime.utcnow().date().isoformat()}
+- Respond to the user's messages based on this context and the conversation history.
+- If you are unable to provide a relevant response based on the context, please let the user know that you are operating in a limited mode and suggest general tips for academic success.
+"""
+
+    # Build messages array
+    messages = [{"role": "system", "content": system_prompt}]
+    
+    # Add conversation history
+    for msg in conversation_history:
+        messages.append({
+            "role": msg.get("role", "user"),
+            "content": msg.get("content", "")
+        })
+    
+    # Add current user message (if not already in history)
+    if not conversation_history or conversation_history[-1].get("content") != user_message:
+        messages.append({"role": "user", "content": user_message})
+    
+    try:
+        client = OpenAI(api_key=api_key)
+        
+        response = client.chat.completions.create(
+            model=app_config.get("AI_MODEL", "gpt-4o-mini"),
+            messages=messages,
+            temperature=app_config.get("AI_TEMPERATURE", 0.6),
+            max_tokens=app_config.get("AI_MAX_TOKENS", 500)
+        )
+        
+        return response.choices[0].message.content
+    
+    except Exception as e:
+        print(f"OpenAI API error: {e}")
+        return _fallback_chat_response(user_message)
+
+
+def _format_courses_context(courses: list, active_course_id: int | None) -> str:
+    """Format courses for system prompt."""
+    if not courses:
+        return "No courses enrolled."
+    
+    lines = ["COURSES:"]
+    for course in courses:
+        marker = "→ " if course.get("id") == active_course_id else "  "
+        score_str = f", Avg: {course.get('averageScore')}%" if course.get('averageScore') else ""
+        lines.append(
+            f"{marker}{course.get('name', 'Unknown')} - Progress: {course.get('progress', 0)}%{score_str}"
+        )
+    
+    return "\n".join(lines)
+
+
+def _fallback_chat_response(user_message: str) -> str:
+    """Fallback response when AI is unavailable."""
+    return (
+        "I'm currently operating in limited mode. While I can't provide AI-powered responses right now, "
+        "here are some general tips:\n\n"
+        "• Check your course materials and syllabus for guidance\n"
+        "• Review your progress dashboard for insights\n"
+        "• Reach out to your instructor for specific questions\n\n"
+        "Please try again later for personalized AI assistance."
+    )
