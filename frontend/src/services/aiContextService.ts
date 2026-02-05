@@ -1,4 +1,4 @@
-import { api } from './client';
+import api from '../api/client';
 
 /**
  * AI Context Structures
@@ -47,7 +47,7 @@ export const aiContextService = {
   async getContext(): Promise<AIContext> {
     try {
       const response = await api.get<AIContext>('/ai/context');
-      return response;
+      return response.data;
     } catch (error) {
       console.error('Failed to fetch AI context:', error);
       throw error;
