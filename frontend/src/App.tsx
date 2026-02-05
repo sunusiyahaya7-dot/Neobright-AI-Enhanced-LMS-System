@@ -6,6 +6,9 @@ import Dashboard from './pages/Dashboard';
 import Courses from './pages/Courses';
 import CourseContent from './pages/CourseContent';
 import Analytics from './pages/Analytics';
+import AIDashboard from './pages/AIDashboard';
+import AIInsights from './pages/AIInsights';
+import Settings from './pages/Settings';
 import ProtectedRoute from './auth/ProtectedRoute';
 import './index.css';
 
@@ -48,6 +51,33 @@ function App() {
             element={
               <ProtectedRoute>
                 <Analytics />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/ai-dashboard"
+            element={
+              <ProtectedRoute>
+                <AIDashboard />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/ai-insights"
+            element={
+              <ProtectedRoute>
+                <AIInsights />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/settings"
+            element={
+              <ProtectedRoute>
+                <Settings />
               </ProtectedRoute>
             }
           />
