@@ -62,12 +62,14 @@ def sync_course_grades(course_id: int):
                     grade_max = item.get("grademax")
                     feedback = item.get("feedback") or item.get("feedbackformatted")
                     graded_date = item.get("gradedategraded") or item.get("gradedate")
+                    assignment_name = item.get("itemname") or f"Assignment {assignment_id_int}"
 
                     grade_data = {
                         "grade": grade_raw,
                         "gradeMax": grade_max if grade_max is not None else 100,
                         "feedback": feedback,
                         "gradeddate": graded_date,
+                        "assignmentName": assignment_name,
                     }
 
                     GradeCacheService.cache_grade(firebase_uid, course_id, assignment_id_int, grade_data)
