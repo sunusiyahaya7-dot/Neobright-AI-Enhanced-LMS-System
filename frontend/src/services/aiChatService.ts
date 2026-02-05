@@ -1,0 +1,76 @@
+import api from '../api/client';
+
+/**
+ * AI Chat Types
+ */
+
+export interface ChatSession {
+  chatId: string;
+  title: string;
+  courseId?: number;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+
+export interface ChatWithMessages extends ChatSession {
+  messages: ChatMessage[];
+}
+
+export interface SendMessageResponse {
+  userMessage: ChatMessage;
+  assistantMessage: ChatMessage;
+}
+
+/**
+ * AI Chat Service
+ * Handles all AI chat operations
+ */
+export const aiChatService = {
+  /**
+   * Create a new chat session
+   */
+  async createChat(options?: { courseId?: number; title?: string }): Promise<ChatSession> {
+    const response = await api.post<ChatSession>('/ai/chats', options || {});
+    return response.data;
+  },
+
+  /**
+   * List all chat sessions for the current user
+   */
+  async listChats(courseId?: number): Promise<ChatSession[]> {
+    const params = courseId ? { courseId } : {};
+    const response = await api.get<{ chats: ChatSession[] }>('/ai/chats', { params });
+    return response.data.chats;
+  },
+
+  /**
+   * Get a specific chat with all messages
+   */
+  async getChat(chatId: string): Promise<ChatWithMessages> {
+    const response = await api.get<ChatWithMessages>(`/ai/chats/${chatId}`);
+    return response.data;
+  },
+
+  /**
+   * Send a message and get AI response
+   */
+  async sendMessage(chatId: string, message: string): Promise<SendMessageResponse> {
+    const response = await api.post<SendMessageResponse>(`/ai/chats/${chatId}/messages`, {
+      message
+    });
+    return response.data;
+  },
+
+  /**
+   * Delete a chat session
+   */
+  async deleteChat(chatId: string): Promise<void> {
+    await api.delete(`/ai/chats/${chatId}`);
+  }
+};

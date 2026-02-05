@@ -152,3 +152,14 @@ def ai_rate_limit(f):
         return f(*args, **kwargs)
     
     return decorated_function
+
+
+def check_rate_limit(user_id: str) -> str | None:
+    """
+    Check rate limit for a user without using as a decorator.
+    
+    Returns:
+        Error message if rate limited, None if allowed
+    """
+    is_allowed, error_message = AiRateLimitService.check_rate_limit(user_id, "insights")
+    return error_message if not is_allowed else None

@@ -53,21 +53,64 @@ def get_ai_context():
         return jsonify({"error": str(e)}), 500
 
 
+# ==================== INSIGHTS CACHING ====================
+
+INSIGHTS_CACHE_HOURS = 6  # Cache insights for 6 hours
+
+
+def _get_cached_insights(firebase_uid: str) -> dict | None:
+    """Retrieve cached insights if not stale."""
+    from datetime import datetime, timedelta, timezone
+    
+    fs = FirestoreService()
+    doc = fs.db.collection('ai_insights_cache').document(firebase_uid).get()
+    
+    if not doc.exists:
+        return None
+    
+    data = doc.to_dict()
+    cached_at = data.get('cached_at')
+    
+    if not cached_at:
+        return None
+    
+    # Make both datetimes timezone-aware for comparison
+    now = datetime.now(timezone.utc)
+    if cached_at.tzinfo is None:
+        cached_at = cached_at.replace(tzinfo=timezone.utc)
+    
+    # Check if cache is stale
+    cache_age = now - cached_at
+    if cache_age > timedelta(hours=INSIGHTS_CACHE_HOURS):
+        return None
+    
+    return data.get('insights')
+
+
+def _save_insights_cache(firebase_uid: str, insights: dict) -> None:
+    """Save insights to cache."""
+    from datetime import datetime, timezone
+    
+    fs = FirestoreService()
+    fs.db.collection('ai_insights_cache').document(firebase_uid).set({
+        'insights': insights,
+        'cached_at': datetime.now(timezone.utc),
+        'user_id': firebase_uid
+    })
+
+
 @ai_bp.route('/ai/insights', methods=['GET'])
 @firebase_required
-@ai_rate_limit  # Rate limit after auth (needs firebase_uid)
 def get_ai_insights():
     """
     GET /api/ai/insights
     
     Returns AI-generated insights for logged-in student.
     
-    Rate limited to 2 calls/minute, 20 calls/hour per user.
+    Query params:
+    - force=true: Skip cache and regenerate (uses tokens, rate limited)
     
-    Uses:
-    - StudentContext from /ai/context
-    - AiService to generate insights
-    - Fallback to rule-based insights if AI fails
+    Rate limited only when generating fresh insights (not cached reads).
     
     Returns:
     {
@@ -77,13 +120,43 @@ def get_ai_insights():
         "actions": [...],
         "risk_level": "low|medium|high",
         "confidence_score": 0.95,
-        "generated_at": "2026-01-27T..."
+        "generated_at": "2026-01-27T...",
+        "cached": true/false,
+        "cache_expires_at": "2026-01-27T..."
     }
     """
     try:
         from models.ai_models import StudentContext
+        from datetime import datetime, timedelta, timezone
+        from services.ai_rate_limit_service import check_rate_limit
         
         firebase_uid = g.firebase_uid
+        force_refresh = request.args.get('force', '').lower() == 'true'
+        
+        # Try to get cached insights (unless force refresh)
+        if not force_refresh:
+            cached = _get_cached_insights(firebase_uid)
+            if cached:
+                # Add cache metadata
+                cached['cached'] = True
+                fs = FirestoreService()
+                doc = fs.db.collection('ai_insights_cache').document(firebase_uid).get()
+                if doc.exists:
+                    cached_at = doc.to_dict().get('cached_at')
+                    if cached_at:
+                        expires_at = cached_at + timedelta(hours=INSIGHTS_CACHE_HOURS)
+                        cached['cache_expires_at'] = expires_at.isoformat() + 'Z'
+                
+                print(f"Returning cached insights for user {firebase_uid}")
+                return jsonify(cached), 200
+        
+        # Rate limit only applies when generating fresh insights
+        rate_limit_error = check_rate_limit(firebase_uid)
+        if rate_limit_error:
+            return jsonify({"error": rate_limit_error}), 429
+        
+        # Generate fresh insights
+        print(f"Generating fresh insights for user {firebase_uid} (force={force_refresh})")
         
         # Build AI context from aggregated data (returns dict)
         context_dict = AIContextService.build_ai_context(firebase_uid)
@@ -99,7 +172,17 @@ def get_ai_insights():
         )
         
         # Convert dataclass to dict for JSON response
-        return jsonify(insights.to_dict()), 200
+        insights_dict = insights.to_dict()
+        
+        # Save to cache
+        _save_insights_cache(firebase_uid, insights_dict)
+        
+        # Add cache metadata
+        insights_dict['cached'] = False
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=INSIGHTS_CACHE_HOURS)
+        insights_dict['cache_expires_at'] = expires_at.isoformat() + 'Z'
+        
+        return jsonify(insights_dict), 200
     
     except Exception as e:
         print(f"Error generating AI insights: {e}")
