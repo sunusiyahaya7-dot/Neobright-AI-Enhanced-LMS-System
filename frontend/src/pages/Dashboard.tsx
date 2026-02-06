@@ -5,6 +5,7 @@ import { getUserProfile, UserProfile } from '../services/userService';
 import { getCourses, getCourseAssignments } from '../services/moodleService';
 import { progressService, ProgressOverview } from '../services/progressService';
 import Layout from '../components/Layout';
+import AIChatPanel from '../components/AIChatPanel';
 import { 
   BookOpen, 
   AlertCircle,
@@ -43,6 +44,7 @@ export default function Dashboard() {
   const [averageGrade, setAverageGrade] = useState<number>(0);
   const [assignmentStats, setAssignmentStats] = useState<{ dueCount: number; doneCount: number; totalCount: number; nextDue?: number }>({ dueCount: 0, doneCount: 0, totalCount: 0 });
   const [loading, setLoading] = useState(true);
+  const [chatOpen, setChatOpen] = useState(false);
 
   useEffect(() => {
     loadDashboardData();
@@ -318,6 +320,20 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+
+        {/* AI Chat Button (Floating) */}
+        {!chatOpen && (
+          <button
+            onClick={() => setChatOpen(true)}
+            className="fixed bottom-6 right-6 w-16 h-16 bg-gradient-to-br from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white rounded-full flex items-center justify-center shadow-lg transition-all hover:scale-110 active:scale-95 z-30"
+            title="Ask NeoBright AI"
+          >
+            <Brain className="w-7 h-7" />
+          </button>
+        )}
+
+        {/* Chat Panel */}
+        <AIChatPanel isOpen={chatOpen} onClose={() => setChatOpen(false)} />
       </div>
     </Layout>
   );
