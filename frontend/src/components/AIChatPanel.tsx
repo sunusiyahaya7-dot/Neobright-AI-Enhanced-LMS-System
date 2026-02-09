@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { X, ChevronDown, Sparkles, BookOpen, BarChart3, Clock, AlertCircle, Loader2 } from 'lucide-react';
+import { useAuth } from '../auth/AuthContext';
 import ChatMessage from './ChatMessage';
 import ChatInput from './ChatInput';
 import { aiChatService, ChatSession, ChatMessage as IChatMessage } from '../services/aiChatService';
 
 const QUICK_ACTIONS = [
   { label: 'Summarize This Topic', icon: BookOpen },
-  { label: 'Quiz Me on This', icon: BarChart3 },
+  { label: 'Quiz Me on This Lesson', icon: BarChart3 },
   { label: "What's Due Soon?", icon: Clock },
   { label: 'Show My Progress', icon: BarChart3 }
 ];
@@ -18,6 +19,7 @@ interface AIChatPanelProps {
 }
 
 export default function AIChatPanel({ courseId, isOpen, onClose }: AIChatPanelProps) {
+  const { user } = useAuth();
   const [chatSession, setChatSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<IChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -26,7 +28,20 @@ export default function AIChatPanel({ courseId, isOpen, onClose }: AIChatPanelPr
   const [isRateLimited, setIsRateLimited] = useState(false);
   const [rateLimitCountdown, setRateLimitCountdown] = useState(0);
   const [selectedAction, setSelectedAction] = useState<string | null>(null);
+  const [lastUserId, setLastUserId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const quickActionsRef = useRef<HTMLDivElement>(null);
+
+  // Detect user/session change and create new chat
+  useEffect(() => {
+    if (user?.uid && user.uid !== lastUserId) {
+      // User has changed or logged in - clear previous session
+      localStorage.removeItem('activeChatId');
+      setChatSession(null);
+      setMessages([]);
+      setLastUserId(user.uid);
+    }
+  }, [user?.uid]);
 
   // Load or create chat session on mount
   useEffect(() => {
@@ -88,7 +103,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose }: AIChatPanelPr
     return () => clearInterval(interval);
   }, [isRateLimited]);
 
-  const handleSendMessage = async (userMessage: string) => {
+  const handleSendMessage = async (userMessage: string, file?: File) => {
     if (!chatSession) return;
 
     try {
@@ -170,6 +185,37 @@ export default function AIChatPanel({ courseId, isOpen, onClose }: AIChatPanelPr
           </button>
         </div>
 
+        {/* Quick Actions - Sticky at Top */}
+        {!loading && (
+          <div ref={quickActionsRef} className="sticky top-0 px-3 py-3 border-b border-gray-200 dark:border-[#2A2D32] bg-white dark:bg-[#1A1C20] z-10 space-y-3">
+            {/* Quick Actions Grid - 2x2 */}
+            <div className="grid grid-cols-2 gap-2">
+              {QUICK_ACTIONS.map((action) => {
+                const IconComponent = action.icon;
+                const isSelected = selectedAction === action.label;
+                return (
+                  <button
+                    key={action.label}
+                    onClick={() => handleQuickAction(action.label)}
+                    disabled={sendingMessage || isRateLimited}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+                      isSelected
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-gray-50 dark:bg-[#2A2D32] text-gray-700 dark:text-gray-300 hover:bg-blue-50 dark:hover:bg-[#3A3D42] border border-gray-200 dark:border-[#3A3D42]'
+                    }`}
+                    title={action.label}
+                  >
+                    <IconComponent className="w-3 h-3 flex-shrink-0" />
+                    <span className="line-clamp-2">{action.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            
+          </div>
+        )}
+
         {/* Messages Area */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {loading ? (
@@ -189,46 +235,27 @@ export default function AIChatPanel({ courseId, isOpen, onClose }: AIChatPanelPr
             </div>
           ) : (
             <>
-              {messages.map((msg, idx) => (
-                <ChatMessage
-                  key={idx}
-                  role={msg.role}
-                  content={msg.content}
-                  timestamp={msg.timestamp}
-                />
-              ))}
+              {messages.map((msg, idx) => {
+                // Generate context-aware actions for assistant messages
+                const actions = msg.role === 'assistant' ? [
+                  { label: 'Start Quiz', onClick: () => handleQuickAction('Quiz Me on This Lesson') },
+                  { label: 'Review Topics First', onClick: () => handleQuickAction('Summarize This Topic') }
+                ] : undefined;
+
+                return (
+                  <ChatMessage
+                    key={idx}
+                    role={msg.role}
+                    content={msg.content}
+                    timestamp={msg.timestamp}
+                    actions={actions}
+                  />
+                );
+              })}
               <div ref={messagesEndRef} />
             </>
           )}
         </div>
-
-        {/* Quick Actions - Tab Style */}
-        {messages.length === 0 && !loading && (
-          <div className="px-3 pb-3 border-b border-gray-200 dark:border-[#2A2D32] bg-gray-50 dark:bg-[#0F1117]">
-            <div className="flex flex-col gap-2">
-              {QUICK_ACTIONS.map((action) => {
-                const IconComponent = action.icon;
-                const isSelected = selectedAction === action.label;
-                return (
-                  <button
-                    key={action.label}
-                    onClick={() => handleQuickAction(action.label)}
-                    disabled={sendingMessage || isRateLimited}
-                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
-                      isSelected
-                        ? 'bg-blue-500 text-white'
-                        : 'bg-white dark:bg-[#1A1C20] text-gray-700 dark:text-gray-300 hover:bg-blue-50 dark:hover:bg-[#2A2D32] border border-gray-200 dark:border-[#2A2D32]'
-                    }`}
-                    title={action.label}
-                  >
-                    <IconComponent className="w-4 h-4 flex-shrink-0" />
-                    <span>{action.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
 
         {/* Input */}
         <ChatInput

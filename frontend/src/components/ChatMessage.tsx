@@ -1,13 +1,19 @@
 import React from 'react';
 import { Clock, User, Brain } from 'lucide-react';
 
+interface ChatAction {
+  label: string;
+  onClick: () => void;
+}
+
 interface ChatMessageProps {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  actions?: ChatAction[];
 }
 
-export default function ChatMessage({ role, content, timestamp }: ChatMessageProps) {
+export default function ChatMessage({ role, content, timestamp, actions }: ChatMessageProps) {
   const isUser = role === 'user';
   const timeAgo = formatTimeAgo(timestamp);
 
@@ -39,6 +45,21 @@ export default function ChatMessage({ role, content, timestamp }: ChatMessagePro
         >
           <p className="text-sm leading-relaxed">{content}</p>
         </div>
+
+        {/* Action Buttons */}
+        {actions && actions.length > 0 && (
+          <div className="flex flex-col gap-2 mt-2">
+            {actions.map((action, idx) => (
+              <button
+                key={idx}
+                onClick={action.onClick}
+                className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors text-left"
+              >
+                {action.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Timestamp */}
         <div className={`flex items-center gap-1 mt-1 text-xs text-gray-500 dark:text-gray-400 ${isUser ? 'justify-end' : 'justify-start'}`}>
