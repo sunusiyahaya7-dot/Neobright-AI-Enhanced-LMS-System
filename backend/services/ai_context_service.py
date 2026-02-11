@@ -124,6 +124,90 @@ class AIContextService:
                     print(f"Error processing course {course.get('id')}: {e}")
                     continue
             
+            # ========== STEP 3.5: Get Assignments with Due Dates + Submission Status ==========
+            assignments_context = []
+            try:
+                for course in moodle_courses:
+                    course_id = course.get("id")
+                    course_name = course.get("fullname", "Unknown")
+                    try:
+                        # 1. Get assignment details (names, due dates)
+                        assign_data = MoodleService.get_assignment_details(course_id)
+                        assignments_by_id = {}
+                        if isinstance(assign_data, dict) and "courses" in assign_data:
+                            for c in assign_data.get("courses", []):
+                                for assignment in c.get("assignments", []):
+                                    assignments_by_id[assignment.get("id")] = assignment
+
+                        # 2. Get activity completion status (bulk, 1 call per course)
+                        completion_map = {}  # cmid -> completed (bool)
+                        try:
+                            completion_data = MoodleService.get_course_progress(course_id, int(moodle_user_id))
+                            for status in completion_data.get("statuses", []):
+                                cmid = status.get("cmid")
+                                # state: 0 = not complete, 1 = complete, 2 = complete (pass), 3 = complete (fail)
+                                completion_map[cmid] = status.get("state", 0) >= 1
+                        except Exception as e:
+                            print(f"Error fetching completion for course {course_id}: {e}")
+
+                        # 3. Get Firestore submissions for this user
+                        submission_map = {}  # assignment_id -> submission
+                        try:
+                            user_submissions = fs.get_user_assignment_submissions(firebase_uid, course_id)
+                            for sub in user_submissions:
+                                aid = sub.get("assignment_id")
+                                if aid:
+                                    submission_map[aid] = sub
+                        except Exception as e:
+                            print(f"Error fetching Firestore submissions for course {course_id}: {e}")
+
+                        # 4. Get course contents to map assignment module cmids
+                        cmid_map = {}  # assignment instance id -> cmid
+                        try:
+                            contents = MoodleService.get_course_contents(course_id)
+                            for section in contents:
+                                for module in section.get("modules", []):
+                                    if module.get("modname") == "assign":
+                                        cmid_map[module.get("instance")] = module.get("id")
+                        except Exception as e:
+                            print(f"Error fetching course contents for {course_id}: {e}")
+
+                        # 5. Build assignment context with status
+                        for assign_id, assignment in assignments_by_id.items():
+                            duedate = assignment.get("duedate", 0)
+                            cmid = cmid_map.get(assign_id)
+
+                            # Determine submission status
+                            firestore_sub = submission_map.get(assign_id)
+                            is_completed_moodle = completion_map.get(cmid, False) if cmid else False
+                            
+                            if firestore_sub and firestore_sub.get("status", "").lower() == "submitted":
+                                status = "submitted"
+                            elif is_completed_moodle:
+                                status = "submitted"
+                            else:
+                                status = "not submitted"
+
+                            assignment_info = {
+                                "name": assignment.get("name", "Unknown"),
+                                "course": course_name,
+                                "duedate": datetime.utcfromtimestamp(duedate).isoformat() if duedate else None,
+                                "duedate_ts": duedate,
+                                "status": status,
+                            }
+                            assignments_context.append(assignment_info)
+
+                    except Exception as e:
+                        print(f"Error fetching assignments for course {course_id}: {e}")
+                        continue
+
+                # Sort by due date (upcoming first)
+                assignments_context.sort(
+                    key=lambda a: a.get("duedate_ts") or 9999999999
+                )
+            except Exception as e:
+                print(f"Error building assignments context: {e}")
+
             # ========== STEP 4: Get Overall Analytics ==========
             analytics_context = {
                 "overallProgress": 0,
@@ -164,6 +248,7 @@ class AIContextService:
             context = {
                 "student": student_info,
                 "courses": courses_context,
+                "assignments": assignments_context,
                 "analytics": analytics_context,
                 "timestamp": datetime.utcnow().isoformat()
             }
