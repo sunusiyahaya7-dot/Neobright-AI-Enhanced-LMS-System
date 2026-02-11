@@ -236,11 +236,29 @@ export default function AIChatPanel({ courseId, isOpen, onClose }: AIChatPanelPr
           ) : (
             <>
               {messages.map((msg, idx) => {
-                // Generate context-aware actions for assistant messages
-                const actions = msg.role === 'assistant' ? [
-                  { label: 'Start Quiz', onClick: () => handleQuickAction('Quiz Me on This Lesson') },
-                  { label: 'Review Topics First', onClick: () => handleQuickAction('Summarize This Topic') }
-                ] : undefined;
+                // Generate context-aware actions based on the preceding user message
+                let actions = undefined;
+                if (msg.role === 'assistant' && idx > 0) {
+                  const userPrompt = messages[idx - 1]?.content?.toLowerCase() || '';
+                  if (userPrompt.includes('progress') || userPrompt.includes('insight') || userPrompt.includes('analytics')) {
+                    actions = [
+                      { label: 'View Detailed Analytics', onClick: () => window.location.href = '/analytics' },
+                    ];
+                  } else if (userPrompt.includes('quiz') || userPrompt.includes('test') || userPrompt.includes('practice')) {
+                    actions = [
+                      { label: 'Start Quiz', onClick: () => handleQuickAction('Quiz Me on This Lesson') },
+                      { label: 'Review Topics First', onClick: () => handleQuickAction('Summarize This Topic') },
+                    ];
+                  } else if (userPrompt.includes('summarize') || userPrompt.includes('summary') || userPrompt.includes('topic')) {
+                    actions = [
+                      { label: 'Quiz Me on This', onClick: () => handleQuickAction('Quiz Me on This Lesson') },
+                    ];
+                  } else if (userPrompt.includes('due') || userPrompt.includes('deadline') || userPrompt.includes('assignment')) {
+                    actions = [
+                      { label: 'View My Courses', onClick: () => window.location.href = '/courses' },
+                    ];
+                  }
+                }
 
                 return (
                   <ChatMessage
