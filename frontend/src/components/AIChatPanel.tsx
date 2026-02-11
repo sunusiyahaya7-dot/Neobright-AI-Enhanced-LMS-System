@@ -65,7 +65,15 @@ export default function AIChatPanel({ courseId, isOpen, onClose }: AIChatPanelPr
             title: 'Dashboard Chat'
           });
           setChatSession(newChat);
-          setMessages([]);
+          
+          // Add welcome message for fresh chat
+          const welcomeMessage: IChatMessage = {
+            role: 'assistant',
+            content: "Hi! I'm NeoBright AI, your learning assistant. How can I help you today?",
+            timestamp: new Date().toISOString()
+          };
+          setMessages([welcomeMessage]);
+          
           localStorage.setItem('activeChatId', newChat.chatId);
         }
       } catch (err: any) {
