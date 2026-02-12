@@ -531,6 +531,7 @@ def _generate_chat_response(
         return _fallback_chat_response(user_message)
     
     # Build system prompt with student context
+    assignments_text = _format_assignments_context(context.get('assignments', []))
     system_prompt = f"""You are NeoBright, a helpful AI learning assistant for university students.
 
 STUDENT CONTEXT:
@@ -541,18 +542,28 @@ STUDENT CONTEXT:
 
 {_format_courses_context(context.get('courses', []), course_id)}
 
+{assignments_text}
+
 GUIDELINES:
+- If user asks you show them their progress, Don't start with "The student's progress is..." Instead, say "Your progress is..." etc.
 - Be encouraging, supportive, and helpful
 - Provide specific, actionable advice
 - Reference the student's actual courses and progress when relevant
 - Keep responses concise but thorough
-- If asked about grades or progress, use the provided context
+- If asked about grades or progress, use the provided context data to give specific numbers
+- If asked about due dates or deadlines, use the ASSIGNMENTS context above to give specific dates and names
+- IMPORTANT: Distinguish between SUBMITTED and NOT SUBMITTED assignments. If an assignment is marked as SUBMITTED, do NOT call it overdue or tell the student to submit it — it's already done
+- Only flag assignments as overdue if they are BOTH past due AND not submitted
+- Format responses with bullet points, bold text (**bold**), and clear structure for readability
+- When listing items (progress, assignments, tips), use bullet points (- ) for clarity
+- Always speak directly to the student using "you" and "your"
+- Avoid jargon or complex terminology; keep language simple and student-friendly
+- If a student asked you to "summarize this topic for me", ask clarifying questions about which aspects they want summarized before providing an answer
 - Never make up information not in the context
 - If asked anything that is not related to learning or courses, politely decline and steer back to academic topics
 - Always prioritize the student's learning and well-being
 - Current date: {datetime.utcnow().date().isoformat()}
 - Respond to the user's messages based on this context and the conversation history.
-- If you are unable to provide a relevant response based on the context, please let the user know that you are operating in a limited mode and suggest general tips for academic success.
 """
 
     # Build messages array
@@ -600,6 +611,67 @@ def _format_courses_context(courses: list, active_course_id: int | None) -> str:
         )
     
     return "\n".join(lines)
+
+
+def _format_assignments_context(assignments: list) -> str:
+    """Format assignments with due dates and submission status for system prompt."""
+    if not assignments:
+        return "ASSIGNMENTS:\nNo assignments found."
+    
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    
+    pending_lines = ["PENDING ASSIGNMENTS (not yet submitted):"]
+    submitted_lines = ["SUBMITTED/COMPLETED ASSIGNMENTS:"]
+    has_pending = False
+    has_submitted = False
+    
+    for a in assignments:
+        name = a.get('name', 'Unknown')
+        course = a.get('course', 'Unknown')
+        duedate_ts = a.get('duedate_ts', 0)
+        status = a.get('status', 'not submitted')
+        
+        if duedate_ts:
+            due_dt = datetime.utcfromtimestamp(duedate_ts).replace(tzinfo=timezone.utc)
+            due_str = due_dt.strftime('%B %d, %Y at %I:%M %p')
+            
+            # Calculate days until due
+            days_diff = (due_dt - now).days
+            if days_diff < 0:
+                time_label = f"(was due {abs(days_diff)} days ago)"
+            elif days_diff == 0:
+                time_label = "(DUE TODAY)"
+            elif days_diff == 1:
+                time_label = "(DUE TOMORROW)"
+            else:
+                time_label = f"(due in {days_diff} days)"
+        else:
+            due_str = "No due date set"
+            time_label = ""
+        
+        if status == "submitted":
+            has_submitted = True
+            submitted_lines.append(f"  ✅ {name} [{course}] — Due: {due_str} — SUBMITTED")
+        else:
+            has_pending = True
+            if duedate_ts and days_diff < 0:
+                pending_lines.append(f"  ⚠️ {name} [{course}] — Due: {due_str} {time_label} — OVERDUE, NOT SUBMITTED")
+            else:
+                pending_lines.append(f"  📌 {name} [{course}] — Due: {due_str} {time_label}")
+    
+    result_lines = []
+    if has_pending:
+        result_lines.extend(pending_lines)
+    else:
+        result_lines.append("PENDING ASSIGNMENTS: None — all assignments are submitted! 🎉")
+    
+    result_lines.append("")  # blank separator
+    
+    if has_submitted:
+        result_lines.extend(submitted_lines)
+    
+    return "\n".join(result_lines)
 
 
 def _fallback_chat_response(user_message: str) -> str:

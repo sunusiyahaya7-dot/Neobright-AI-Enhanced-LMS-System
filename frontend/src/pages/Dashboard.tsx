@@ -5,6 +5,7 @@ import { getUserProfile, UserProfile } from '../services/userService';
 import { getCourses, getCourseAssignments } from '../services/moodleService';
 import { progressService, ProgressOverview } from '../services/progressService';
 import Layout from '../components/Layout';
+import AIChatPanel from '../components/AIChatPanel';
 import { 
   BookOpen, 
   AlertCircle,
@@ -13,7 +14,8 @@ import {
   TrendingUp,
   TrendingDown,
   Zap,
-  Calendar
+  Calendar,
+  Sparkles
 } from 'lucide-react';
 
 interface Course {
@@ -43,6 +45,7 @@ export default function Dashboard() {
   const [averageGrade, setAverageGrade] = useState<number>(0);
   const [assignmentStats, setAssignmentStats] = useState<{ dueCount: number; doneCount: number; totalCount: number; nextDue?: number }>({ dueCount: 0, doneCount: 0, totalCount: 0 });
   const [loading, setLoading] = useState(true);
+  const [chatOpen, setChatOpen] = useState(false);
 
   useEffect(() => {
     loadDashboardData();
@@ -318,6 +321,43 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+
+        {/* AI Chat Button (Floating with Label) */}
+        {!chatOpen && (
+          <div className="fixed bottom-8 right-8 flex flex-col items-end gap-3 z-30 group">
+            {/* Label - Hidden by default, shown on hover */}
+            <div className="bg-gray-900 dark:bg-gray-800 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+              Ask NeoBright AI
+            </div>
+            
+            {/* Floating Button */}
+            <button
+              onClick={() => setChatOpen(true)}
+              className="w-16 h-16 bg-gradient-to-br from-blue-500 via-blue-500 to-blue-600 hover:from-blue-600 hover:via-blue-600 hover:to-blue-700 text-white rounded-full flex items-center justify-center shadow-xl transition-all hover:scale-110 active:scale-95 z-30"
+              title="Ask NeoBright AI"
+              style={{
+                animation: 'subtle-float 4s ease-in-out 2s infinite'
+              }}
+            >
+              <Sparkles className="w-8 h-8" />
+              
+              {/* Pulsing glow effect */}
+              <div className="absolute inset-0 rounded-full bg-blue-400 opacity-20 group-hover:opacity-40 transition-opacity" style={{ animation: 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite' }} />
+            </button>
+          </div>
+        )}
+
+        <style>{`
+          @keyframes subtle-float {
+            0%, 100% { transform: translateY(0px) rotate(0deg); }
+            25% { transform: translateY(-2px) rotate(-1deg); }
+            50% { transform: translateY(0px) rotate(0deg); }
+            75% { transform: translateY(-2px) rotate(1deg); }
+          }
+        `}</style>
+
+        {/* Chat Panel */}
+        <AIChatPanel isOpen={chatOpen} onClose={() => setChatOpen(false)} />
       </div>
     </Layout>
   );
