@@ -383,10 +383,17 @@ def send_message(chat_id: str):
     POST /api/ai/chats/<chat_id>/messages
     
     Send a message and get AI response.
+    Supports optional file upload (PDF or image).
     
-    Request body:
+    Request body (JSON):
     {
         "message": "Help me understand this concept..."
+    }
+    
+    OR multipart/form-data:
+    {
+        "message": "Summarize this...",
+        "file": <file object>
     }
     
     Returns:
@@ -397,13 +404,34 @@ def send_message(chat_id: str):
     """
     try:
         from models.ai_models import StudentContext
+        from services.file_service import FileService
         
         firebase_uid = g.firebase_uid
-        body = request.get_json() or {}
-        user_message_content = body.get("message", "").strip()
         
-        if not user_message_content:
-            return jsonify({"error": "Message is required"}), 400
+        # Handle both JSON and multipart/form-data
+        user_message_content = request.form.get("message", "").strip() or request.get_json(silent=True).get("message", "").strip() if request.get_json(silent=True) else ""
+        
+        # Check for file upload
+        file_context = None
+        file_display_message = None
+        if 'file' in request.files:
+            file = request.files['file']
+            if file and file.filename:
+                file_content = file.read()
+                file_name = file.filename
+                file_type = file.content_type or 'application/octet-stream'
+                
+                # Extract text from file
+                extracted_text = FileService.process_uploaded_file(file_content, file_name, file_type)
+                
+                if extracted_text:
+                    # Create file context for AI (internal)
+                    file_context = FileService.create_file_context_message(file_name, extracted_text)
+                    # Create display message for chat (user-facing)
+                    file_display_message = FileService.create_display_message(file_name, len(file_content))
+        
+        if not user_message_content and not file_display_message:
+            return jsonify({"error": "Message or file is required"}), 400
         
         fs = FirestoreService()
         
@@ -418,10 +446,30 @@ def send_message(chat_id: str):
         if chat_data.get("user_id") != firebase_uid:
             return jsonify({"error": "Access denied"}), 403
         
-        # Save user message
-        user_msg = ChatMessage(role="user", content=user_message_content)
+        # Build final user message for saving (with both file display and original message)
+        final_user_message = ""
+        if file_display_message:
+            final_user_message = file_display_message
+        if user_message_content:
+            if final_user_message:
+                final_user_message += f"\n\n{user_message_content}"
+            else:
+                final_user_message = user_message_content
+        
+        # Save user message to chat
+        user_msg = ChatMessage(role="user", content=final_user_message)
         fs.save_chat_message(chat_id, user_msg)
         user_timestamp = datetime.utcnow()
+        
+        # Build AI context message (with file content for AI processing)
+        ai_context_message = ""
+        if file_context:
+            ai_context_message = file_context
+        if user_message_content:
+            if ai_context_message:
+                ai_context_message += f"\n\nUser request: {user_message_content}"
+            else:
+                ai_context_message = user_message_content
         
         # Get student context for AI
         context_dict = AIContextService.build_ai_context(firebase_uid)
@@ -430,9 +478,9 @@ def send_message(chat_id: str):
         previous_messages = fs.get_chat_messages(chat_id)
         conversation_history = previous_messages[-10:] if len(previous_messages) > 10 else previous_messages
         
-        # Generate AI response using chat-specific prompt
+        # Generate AI response using chat-specific prompt with file context
         ai_response = _generate_chat_response(
-            user_message_content,
+            ai_context_message,
             context_dict,
             conversation_history,
             chat_data.get("moodle_course_id"),
@@ -475,7 +523,7 @@ def delete_chat(chat_id: str):
     """
     DELETE /api/ai/chats/<chat_id>
     
-    Delete a chat session and all its messages.
+    Delete a cghat session and all its messaes.
     """
     try:
         firebase_uid = g.firebase_uid
@@ -558,6 +606,19 @@ GUIDELINES:
 - When listing items (progress, assignments, tips), use bullet points (- ) for clarity
 - Always speak directly to the student using "you" and "your"
 - Avoid jargon or complex terminology; keep language simple and student-friendly
+
+QUIZ & LEARNING GUIDELINES:
+- When a student asks to be quizzed ("Quiz Me", "create a quiz", "test me", etc.):
+  - FIRST, ask which specific lecture, topic, or chapter they want to be quizzed on
+  - THEN, ask them to upload lecture notes/materials OR provide the topic content
+  - Do NOT create quizzes without specific content to base them on
+  - Explain that you need the specific material to create relevant questions
+  - If they mention a course name (e.g., "Parallel Computing"), ask for the specific topic/lecture number
+- When a student asks to summarize a topic:
+  - Ask which specific topic or lecture they want summarized
+  - Ask them to provide the material/notes if needed
+- Use the student's course names from context when suggesting topics
+
 - If a student asked you to "summarize this topic for me", ask clarifying questions about which aspects they want summarized before providing an answer
 - Never make up information not in the context
 - If asked anything that is not related to learning or courses, politely decline and steer back to academic topics

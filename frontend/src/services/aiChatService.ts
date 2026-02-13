@@ -59,12 +59,28 @@ export const aiChatService = {
 
   /**
    * Send a message and get AI response
+   * Optionally supports file upload (PDF or image)
    */
-  async sendMessage(chatId: string, message: string): Promise<SendMessageResponse> {
-    const response = await api.post<SendMessageResponse>(`/ai/chats/${chatId}/messages`, {
-      message
-    });
-    return response.data;
+  async sendMessage(chatId: string, message: string, file?: File): Promise<SendMessageResponse> {
+    if (file) {
+      // Use FormData for file upload
+      const formData = new FormData();
+      formData.append('message', message);
+      formData.append('file', file);
+      
+      const response = await api.post<SendMessageResponse>(`/ai/chats/${chatId}/messages`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+      return response.data;
+    } else {
+      // Use JSON for text-only messages
+      const response = await api.post<SendMessageResponse>(`/ai/chats/${chatId}/messages`, {
+        message
+      });
+      return response.data;
+    }
   },
 
   /**

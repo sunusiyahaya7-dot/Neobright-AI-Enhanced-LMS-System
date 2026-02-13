@@ -127,8 +127,8 @@ export default function AIChatPanel({ courseId, isOpen, onClose }: AIChatPanelPr
       };
       setMessages((prev) => [...prev, userMsg]);
 
-      // Send to backend
-      const response = await aiChatService.sendMessage(chatSession.chatId, userMessage);
+      // Send to backend with file if provided
+      const response = await aiChatService.sendMessage(chatSession.chatId, userMessage, file);
 
       // Add assistant message
       setMessages((prev) => [...prev, response.assistantMessage]);
@@ -244,26 +244,39 @@ export default function AIChatPanel({ courseId, isOpen, onClose }: AIChatPanelPr
           ) : (
             <>
               {messages.map((msg, idx) => {
-                // Generate context-aware actions based on the preceding user message
+                // Generate context-aware actions based on the AI's RESPONSE content, not user prompt
                 let actions = undefined;
-                if (msg.role === 'assistant' && idx > 0) {
-                  const userPrompt = messages[idx - 1]?.content?.toLowerCase() || '';
-                  if (userPrompt.includes('progress') || userPrompt.includes('insight') || userPrompt.includes('analytics')) {
+                if (msg.role === 'assistant') {
+                  const responseContent = msg.content?.toLowerCase() || '';
+                  
+                  // Action buttons only appear when AI response suggests a specific action
+                  
+                  // Progress/Analytics: show analytics link when AI mentions their progress metrics
+                  if (responseContent.includes('progress') && (responseContent.includes('completion') || responseContent.includes('overall'))) {
                     actions = [
                       { label: 'View Detailed Analytics', onClick: () => window.location.href = '/analytics' },
                     ];
-                  } else if (userPrompt.includes('quiz') || userPrompt.includes('test') || userPrompt.includes('practice')) {
+                  }
+                  // Quiz: only show upload action if AI is asking for notes to create quiz
+                  else if ((responseContent.includes('upload') || responseContent.includes('share') || responseContent.includes('provide the')) && responseContent.includes('quiz')) {
+                    actions = undefined; // File upload is handled by ChatInput, not action buttons
+                  }
+                  // If AI has actually provided quiz content (numbered questions format)
+                  else if (responseContent.match(/^\s*\d+\s*[.)]/m) || responseContent.includes('**question')) {
                     actions = [
-                      { label: 'Start Quiz', onClick: () => handleQuickAction('Quiz Me on This Lesson') },
                       { label: 'Review Topics First', onClick: () => handleQuickAction('Summarize This Topic') },
                     ];
-                  } else if (userPrompt.includes('summarize') || userPrompt.includes('summary') || userPrompt.includes('topic')) {
-                    actions = [
-                      { label: 'Quiz Me on This', onClick: () => handleQuickAction('Quiz Me on This Lesson') },
-                    ];
-                  } else if (userPrompt.includes('due') || userPrompt.includes('deadline') || userPrompt.includes('assignment')) {
+                  }
+                  // Due dates listed: show courses link
+                  else if ((responseContent.includes('due') || responseContent.includes('deadline')) && responseContent.includes('date')) {
                     actions = [
                       { label: 'View My Courses', onClick: () => window.location.href = '/courses' },
+                    ];
+                  }
+                  // Summary provided: show quiz option
+                  else if ((responseContent.includes('summary') || responseContent.includes('here\'s an overview')) && !responseContent.includes('which')) {
+                    actions = [
+                      { label: 'Quiz Me on This', onClick: () => handleQuickAction('Quiz Me on This Lesson') },
                     ];
                   }
                 }
