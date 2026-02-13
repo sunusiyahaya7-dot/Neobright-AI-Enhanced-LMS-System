@@ -409,28 +409,43 @@ def send_message(chat_id: str):
         firebase_uid = g.firebase_uid
         
         # Handle both JSON and multipart/form-data
-        user_message_content = request.form.get("message", "").strip() or request.get_json(silent=True).get("message", "").strip() if request.get_json(silent=True) else ""
+        user_message_content = ""
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            user_message_content = request.form.get("message", "").strip()
+        else:
+            body = request.get_json(silent=True) or {}
+            user_message_content = body.get("message", "").strip()
         
         # Check for file upload
         file_context = None
-        file_display_message = None
+        file_meta = None  # File metadata for frontend rendering
         if 'file' in request.files:
             file = request.files['file']
             if file and file.filename:
                 file_content = file.read()
                 file_name = file.filename
                 file_type = file.content_type or 'application/octet-stream'
+                file_size = len(file_content)
+                
+                print(f"[FILE UPLOAD] Received: {file_name} ({file_type}, {file_size} bytes)")
+                
+                # Store file metadata for frontend
+                file_meta = {
+                    "name": file_name,
+                    "type": file_type,
+                    "size": file_size
+                }
                 
                 # Extract text from file
                 extracted_text = FileService.process_uploaded_file(file_content, file_name, file_type)
                 
+                print(f"[FILE UPLOAD] Extraction result: {len(extracted_text) if extracted_text else 0} chars")
+                
                 if extracted_text:
-                    # Create file context for AI (internal)
+                    # Create file context for AI (internal - full text)
                     file_context = FileService.create_file_context_message(file_name, extracted_text)
-                    # Create display message for chat (user-facing)
-                    file_display_message = FileService.create_display_message(file_name, len(file_content))
         
-        if not user_message_content and not file_display_message:
+        if not user_message_content and not file_meta:
             return jsonify({"error": "Message or file is required"}), 400
         
         fs = FirestoreService()
@@ -446,18 +461,9 @@ def send_message(chat_id: str):
         if chat_data.get("user_id") != firebase_uid:
             return jsonify({"error": "Access denied"}), 403
         
-        # Build final user message for saving (with both file display and original message)
-        final_user_message = ""
-        if file_display_message:
-            final_user_message = file_display_message
-        if user_message_content:
-            if final_user_message:
-                final_user_message += f"\n\n{user_message_content}"
-            else:
-                final_user_message = user_message_content
-        
-        # Save user message to chat
-        user_msg = ChatMessage(role="user", content=final_user_message)
+        # Save user message (just the text part, file is metadata)
+        save_content = user_message_content or ("Analyze this file" if file_meta else "")
+        user_msg = ChatMessage(role="user", content=save_content)
         fs.save_chat_message(chat_id, user_msg)
         user_timestamp = datetime.utcnow()
         
@@ -497,10 +503,10 @@ def send_message(chat_id: str):
             "updated_at": datetime.utcnow()
         })
         
-        return jsonify({
+        response_data = {
             "userMessage": {
                 "role": "user",
-                "content": user_message_content,
+                "content": save_content,
                 "timestamp": user_timestamp.isoformat()
             },
             "assistantMessage": {
@@ -508,7 +514,13 @@ def send_message(chat_id: str):
                 "content": ai_response,
                 "timestamp": assistant_timestamp.isoformat()
             }
-        }), 200
+        }
+        
+        # Include file metadata if a file was uploaded
+        if file_meta:
+            response_data["userMessage"]["file"] = file_meta
+        
+        return jsonify(response_data), 200
     
     except Exception as e:
         print(f"Error sending message: {e}")

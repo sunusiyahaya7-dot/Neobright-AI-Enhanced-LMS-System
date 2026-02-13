@@ -1,5 +1,11 @@
 import React from 'react';
-import { Clock, User, Sparkles } from 'lucide-react';
+import { Clock, User, Sparkles, FileText, Image as ImageIcon } from 'lucide-react';
+
+interface FileAttachment {
+  name: string;
+  type: string;
+  size: number;
+}
 
 interface ChatAction {
   label: string;
@@ -10,7 +16,9 @@ interface ChatMessageProps {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  file?: FileAttachment;
   actions?: ChatAction[];
+  isProcessing?: boolean;
 }
 
 /**
@@ -39,7 +47,7 @@ function renderContent(text: string): React.ReactNode[] {
   lines.forEach((line, i) => {
     const trimmed = line.trim();
 
-    // Bullet point: - or •
+    // Bullet point: - or *
     if (/^[-•]\s+/.test(trimmed)) {
       if (listType !== 'ul') {
         flushList();
@@ -80,21 +88,17 @@ function formatInline(text: string): React.ReactNode {
   let match;
 
   while ((match = regex.exec(text)) !== null) {
-    // Add text before match
     if (match.index > lastIndex) {
       parts.push(text.slice(lastIndex, match.index));
     }
     if (match[1]) {
-      // **bold**
       parts.push(<strong key={match.index} className="font-semibold">{match[1]}</strong>);
     } else if (match[2]) {
-      // *italic*
       parts.push(<em key={match.index}>{match[2]}</em>);
     }
     lastIndex = regex.lastIndex;
   }
 
-  // Add remaining text
   if (lastIndex < text.length) {
     parts.push(text.slice(lastIndex));
   }
@@ -102,9 +106,86 @@ function formatInline(text: string): React.ReactNode {
   return parts.length === 1 ? parts[0] : <>{parts}</>;
 }
 
-export default function ChatMessage({ role, content, timestamp, actions }: ChatMessageProps) {
+function formatFileSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
+
+function getFileTypeLabel(mimeType: string): string {
+  if (mimeType === 'application/pdf') return 'PDF';
+  if (mimeType.startsWith('image/png')) return 'PNG';
+  if (mimeType.startsWith('image/jpeg') || mimeType.startsWith('image/jpg')) return 'JPG';
+  if (mimeType.startsWith('image/webp')) return 'WebP';
+  if (mimeType.startsWith('image/')) return 'Image';
+  return 'File';
+}
+
+/** File attachment card - styled like the ChatGPT reference */
+function FileCard({ file }: { file: FileAttachment }) {
+  const isPdf = file.type === 'application/pdf';
+  const isImage = file.type.startsWith('image/');
+  const typeLabel = getFileTypeLabel(file.type);
+
+  return (
+    <div className="flex items-center gap-3 bg-gray-800 dark:bg-[#2A2D32] border border-gray-700 dark:border-[#3A3D42] rounded-xl px-3 py-2.5 mb-2 max-w-[280px]">
+      {/* File icon */}
+      <div className={`flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center ${
+        isPdf ? 'bg-red-500' : isImage ? 'bg-purple-500' : 'bg-gray-500'
+      }`}>
+        {isPdf ? (
+          <FileText className="w-5 h-5 text-white" />
+        ) : isImage ? (
+          <ImageIcon className="w-5 h-5 text-white" />
+        ) : (
+          <FileText className="w-5 h-5 text-white" />
+        )}
+      </div>
+      {/* File info */}
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium truncate text-gray-100">{file.name}</p>
+        <p className="text-xs text-gray-400">{typeLabel} · {formatFileSize(file.size)}</p>
+      </div>
+    </div>
+  );
+}
+
+/** Processing indicator for "Reading document..." */
+function ProcessingIndicator() {
+  return (
+    <div className="flex items-center gap-2 px-4 py-3">
+      <div className="flex gap-1">
+        <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+        <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+        <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+      </div>
+      <span className="text-sm text-gray-500 dark:text-gray-400 italic">Reading document...</span>
+    </div>
+  );
+}
+
+export default function ChatMessage({ role, content, timestamp, file, actions, isProcessing }: ChatMessageProps) {
   const isUser = role === 'user';
   const timeAgo = formatTimeAgo(timestamp);
+
+  // Processing state: show typing indicator
+  if (isProcessing) {
+    return (
+      <div className="flex gap-3 mb-4 flex-row">
+        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center">
+          <Sparkles className="w-4 h-4 text-white" />
+        </div>
+        <div className="flex-1 max-w-[85%]">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">NeoBright AI</span>
+          </div>
+          <div className="rounded-2xl bg-gray-100 dark:bg-[#2A2D32] rounded-bl-sm">
+            <ProcessingIndicator />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`flex gap-3 mb-4 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
@@ -121,12 +202,17 @@ export default function ChatMessage({ role, content, timestamp, actions }: ChatM
       )}
 
       {/* Message Content */}
-      <div className="flex-1 max-w-[85%]">
+      <div className={`flex-1 max-w-[85%] ${isUser ? 'flex flex-col items-end' : ''}`}>
         {/* Assistant label */}
         {!isUser && (
           <div className="flex items-center gap-2 mb-1">
             <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">NeoBright AI</span>
           </div>
+        )}
+
+        {/* File card (shown above message bubble for user messages) */}
+        {isUser && file && (
+          <FileCard file={file} />
         )}
 
         <div
@@ -143,7 +229,7 @@ export default function ChatMessage({ role, content, timestamp, actions }: ChatM
           )}
         </div>
 
-        {/* Action Buttons - outline style like reference */}
+        {/* Action Buttons - outline style */}
         {actions && actions.length > 0 && (
           <div className="flex flex-wrap gap-2 mt-2">
             {actions.map((action, idx) => (

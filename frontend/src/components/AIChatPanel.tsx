@@ -24,6 +24,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose }: AIChatPanelPr
   const [messages, setMessages] = useState<IChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [sendingMessage, setSendingMessage] = useState(false);
+  const [processingFile, setProcessingFile] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isRateLimited, setIsRateLimited] = useState(false);
   const [rateLimitCountdown, setRateLimitCountdown] = useState(0);
@@ -119,19 +120,37 @@ export default function AIChatPanel({ courseId, isOpen, onClose }: AIChatPanelPr
       setError(null);
       setSelectedAction(null);
 
-      // Optimistically add user message
+      // Build optimistic user message with file metadata if present
       const userMsg: IChatMessage = {
         role: 'user',
-        content: userMessage,
-        timestamp: new Date().toISOString()
+        content: userMessage || (file ? 'Analyze this file' : ''),
+        timestamp: new Date().toISOString(),
+        ...(file && {
+          file: {
+            name: file.name,
+            type: file.type,
+            size: file.size
+          }
+        })
       };
       setMessages((prev) => [...prev, userMsg]);
+
+      // Show processing indicator if file is attached
+      if (file) {
+        setProcessingFile(true);
+      }
 
       // Send to backend with file if provided
       const response = await aiChatService.sendMessage(chatSession.chatId, userMessage, file);
 
-      // Add assistant message
-      setMessages((prev) => [...prev, response.assistantMessage]);
+      setProcessingFile(false);
+
+      // Replace optimistic user msg with backend response (has file metadata), add AI response
+      setMessages((prev) => [
+        ...prev.slice(0, -1),
+        response.userMessage,
+        response.assistantMessage
+      ]);
     } catch (err: any) {
       const errorMsg = err?.response?.data?.message || err.message || 'Failed to send message';
 
@@ -148,6 +167,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose }: AIChatPanelPr
       setMessages((prev) => prev.slice(0, -1));
     } finally {
       setSendingMessage(false);
+      setProcessingFile(false);
     }
   };
 
@@ -287,10 +307,20 @@ export default function AIChatPanel({ courseId, isOpen, onClose }: AIChatPanelPr
                     role={msg.role}
                     content={msg.content}
                     timestamp={msg.timestamp}
+                    file={msg.file}
                     actions={actions}
                   />
                 );
               })}
+              {/* Processing indicator when reading a document */}
+              {processingFile && (
+                <ChatMessage
+                  role="assistant"
+                  content=""
+                  timestamp={new Date().toISOString()}
+                  isProcessing={true}
+                />
+              )}
               <div ref={messagesEndRef} />
             </>
           )}
