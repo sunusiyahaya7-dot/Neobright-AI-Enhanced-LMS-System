@@ -284,7 +284,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose }: AIChatPanelPr
                   // If AI has actually provided quiz content (numbered questions format)
                   else if (responseContent.match(/^\s*\d+\s*[.)]/m) || responseContent.includes('**question')) {
                     actions = [
-                      { label: 'Review Topics First', onClick: () => handleQuickAction('Summarize This Topic') },
+                      { label: 'Review Topics First', onClick: () => window.location.href = '/courses' },
                     ];
                   }
                   // Due dates listed: show courses link
@@ -293,10 +293,10 @@ export default function AIChatPanel({ courseId, isOpen, onClose }: AIChatPanelPr
                       { label: 'View My Courses', onClick: () => window.location.href = '/courses' },
                     ];
                   }
-                  // Summary provided: show quiz option
+                  // Summary provided: show quiz option 
                   else if ((responseContent.includes('summary') || responseContent.includes('here\'s an overview')) && !responseContent.includes('which')) {
                     actions = [
-                      { label: 'Quiz Me on This', onClick: () => handleQuickAction('Quiz Me on This Lesson') },
+                      { label: 'Quiz Me on This lesson', onClick: () => handleQuickAction('Quiz Me on This Lesson') },
                     ];
                   }
                 }
