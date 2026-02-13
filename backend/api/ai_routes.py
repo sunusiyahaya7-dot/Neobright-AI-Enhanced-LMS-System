@@ -16,6 +16,48 @@ from models.firestore_models import ChatMessage
 ai_bp = Blueprint('ai', __name__, url_prefix='/api')
 
 
+# ═══════════════════════════════════════════════════════
+# DEBUG endpoint — will be removing in production
+# ═══════════════════════════════════════════════════════
+@ai_bp.route('/ai/debug-upload', methods=['POST'])
+def debug_upload():
+    """
+    POST /api/ai/debug-upload  (NO AUTH REQUIRED)
+    Test file upload processing. Send multipart/form-data with a 'file' field.
+    """
+    from services.file_service import FileService
+    
+    info = {
+        "content_type": request.content_type,
+        "content_length": request.content_length,
+        "files_keys": list(request.files.keys()) if request.files else [],
+        "form_keys": list(request.form.keys()) if request.form else [],
+    }
+    print(f"[DEBUG UPLOAD] Request info: {info}")
+    
+    if 'file' not in request.files:
+        info["error"] = "No 'file' key in request.files"
+        return jsonify(info), 400
+    
+    file = request.files['file']
+    file_content = file.read()
+    info["file_name"] = file.filename
+    info["file_content_type"] = file.content_type
+    info["file_size_bytes"] = len(file_content)
+    info["file_header_hex"] = file_content[:16].hex() if file_content else "EMPTY"
+    
+    print(f"[DEBUG UPLOAD] File: name={file.filename}, type={file.content_type}, size={len(file_content)}, header={info['file_header_hex']}")
+    
+    # Try extraction
+    extracted = FileService.process_uploaded_file(file_content, file.filename, file.content_type)
+    info["extracted_length"] = len(extracted) if extracted else 0
+    info["extracted_preview"] = extracted[:500] if extracted else None
+    
+    print(f"[DEBUG UPLOAD] Extraction result: {info['extracted_length']} chars")
+    
+    return jsonify(info), 200
+
+
 @ai_bp.route('/ai/context', methods=['GET'])
 @firebase_required
 def get_ai_context():
@@ -383,10 +425,17 @@ def send_message(chat_id: str):
     POST /api/ai/chats/<chat_id>/messages
     
     Send a message and get AI response.
+    Supports optional file upload (PDF or image).
     
-    Request body:
+    Request body (JSON):
     {
         "message": "Help me understand this concept..."
+    }
+    
+    OR multipart/form-data:
+    {
+        "message": "Summarize this...",
+        "file": <file object>
     }
     
     Returns:
@@ -397,13 +446,55 @@ def send_message(chat_id: str):
     """
     try:
         from models.ai_models import StudentContext
+        from services.file_service import FileService
         
         firebase_uid = g.firebase_uid
-        body = request.get_json() or {}
-        user_message_content = body.get("message", "").strip()
         
-        if not user_message_content:
-            return jsonify({"error": "Message is required"}), 400
+        # ── Verbose request debugging ──
+        print(f"[SEND_MSG] content_type={request.content_type}")
+        print(f"[SEND_MSG] content_length={request.content_length}")
+        print(f"[SEND_MSG] files keys={list(request.files.keys()) if request.files else 'NONE'}")
+        print(f"[SEND_MSG] form keys={list(request.form.keys()) if request.form else 'NONE'}")
+        
+        # Handle both JSON and multipart/form-data
+        user_message_content = ""
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            user_message_content = request.form.get("message", "").strip()
+        else:
+            body = request.get_json(silent=True) or {}
+            user_message_content = body.get("message", "").strip()
+        
+        # Check for file upload
+        file_context = None
+        file_meta = None  # File metadata for frontend rendering
+        if 'file' in request.files:
+            file = request.files['file']
+            if file and file.filename:
+                file_content = file.read()
+                file_name = file.filename
+                file_type = file.content_type or 'application/octet-stream'
+                file_size = len(file_content)
+                
+                print(f"[FILE UPLOAD] Received: {file_name} ({file_type}, {file_size} bytes)")
+                
+                # Store file metadata for frontend
+                file_meta = {
+                    "name": file_name,
+                    "type": file_type,
+                    "size": file_size
+                }
+                
+                # Extract text from file
+                extracted_text = FileService.process_uploaded_file(file_content, file_name, file_type)
+                
+                print(f"[FILE UPLOAD] Extraction result: {len(extracted_text) if extracted_text else 0} chars")
+                
+                if extracted_text:
+                    # Create file context for AI (internal - full text)
+                    file_context = FileService.create_file_context_message(file_name, extracted_text)
+        
+        if not user_message_content and not file_meta:
+            return jsonify({"error": "Message or file is required"}), 400
         
         fs = FirestoreService()
         
@@ -418,10 +509,21 @@ def send_message(chat_id: str):
         if chat_data.get("user_id") != firebase_uid:
             return jsonify({"error": "Access denied"}), 403
         
-        # Save user message
-        user_msg = ChatMessage(role="user", content=user_message_content)
+        # Save user message (just the text part, file is metadata)
+        save_content = user_message_content or ("Analyze this file" if file_meta else "")
+        user_msg = ChatMessage(role="user", content=save_content)
         fs.save_chat_message(chat_id, user_msg)
         user_timestamp = datetime.utcnow()
+        
+        # Build AI context message (with file content for AI processing)
+        ai_context_message = ""
+        if file_context:
+            ai_context_message = file_context
+        if user_message_content:
+            if ai_context_message:
+                ai_context_message += f"\n\nUser request: {user_message_content}"
+            else:
+                ai_context_message = user_message_content
         
         # Get student context for AI
         context_dict = AIContextService.build_ai_context(firebase_uid)
@@ -430,9 +532,9 @@ def send_message(chat_id: str):
         previous_messages = fs.get_chat_messages(chat_id)
         conversation_history = previous_messages[-10:] if len(previous_messages) > 10 else previous_messages
         
-        # Generate AI response using chat-specific prompt
+        # Generate AI response using chat-specific prompt with file context
         ai_response = _generate_chat_response(
-            user_message_content,
+            ai_context_message,
             context_dict,
             conversation_history,
             chat_data.get("moodle_course_id"),
@@ -449,10 +551,10 @@ def send_message(chat_id: str):
             "updated_at": datetime.utcnow()
         })
         
-        return jsonify({
+        response_data = {
             "userMessage": {
                 "role": "user",
-                "content": user_message_content,
+                "content": save_content,
                 "timestamp": user_timestamp.isoformat()
             },
             "assistantMessage": {
@@ -460,7 +562,13 @@ def send_message(chat_id: str):
                 "content": ai_response,
                 "timestamp": assistant_timestamp.isoformat()
             }
-        }), 200
+        }
+        
+        # Include file metadata if a file was uploaded
+        if file_meta:
+            response_data["userMessage"]["file"] = file_meta
+        
+        return jsonify(response_data), 200
     
     except Exception as e:
         print(f"Error sending message: {e}")
@@ -475,7 +583,7 @@ def delete_chat(chat_id: str):
     """
     DELETE /api/ai/chats/<chat_id>
     
-    Delete a chat session and all its messages.
+    Delete a cghat session and all its messaes.
     """
     try:
         firebase_uid = g.firebase_uid
@@ -558,7 +666,32 @@ GUIDELINES:
 - When listing items (progress, assignments, tips), use bullet points (- ) for clarity
 - Always speak directly to the student using "you" and "your"
 - Avoid jargon or complex terminology; keep language simple and student-friendly
+
+QUIZ & LEARNING GUIDELINES:
+- When a student asks to be quizzed ("Quiz Me", "create a quiz", "test me", etc.):
+  - FIRST, ask which specific lecture, topic, or chapter they want to be quizzed on
+  - THEN, ask them to upload lecture notes/materials OR provide the topic content
+  - Do NOT create quizzes without specific content to base them on
+  - Explain that you need the specific material to create relevant questions
+  - If they mention a course name (e.g., "Parallel Computing"), ask for the specific topic/lecture number
+  - When a student uploads a file and asks you to quiz them on it, extract the key concepts and create 3-5 questions based on that content
+  - Make sure quiz questions are directly relevant to the provided material and not generic questions about the course
+  - When creating quiz questions, provide a mix of question types (e.g., multiple choice, short answer) and cover different aspects of the material (definitions, applications, implications)
+  - When displaying quiz questions, format them clearly with question numbers and options (if multiple choice)
+  - When displaying quiz results, provide explanations for correct and incorrect answers to enhance learning 
+  - Display the Quiz Questions and Answers beautifully using markdown and emojis for better engagement
+
+- When a student asks to summarize a topic:
+  - Ask which specific topic or lecture they want summarized
+  - Ask them to provide the material/notes if needed
+- Use the student's course names from context when suggesting topics
+
 - If a student asked you to "summarize this topic for me", ask clarifying questions about which aspects they want summarized before providing an answer
+  - Summarize it very concisely, focusing on key points and main ideas
+  - Always cite the source of information if it was provided in the context 
+  - Summaries in a way that even a baby will be able to understand properly
+  - For summaries, only use bullet points (for main points use numbers and make sure they are in order (e.g 1,2,3 ...) or numerals to differentiate) where necessary; prefer short paragraphs and clear explanations aligned with the content provided
+  - if asked to summarize again, provide a more concise paragraph summary focusing on the absolute essentials.
 - Never make up information not in the context
 - If asked anything that is not related to learning or courses, politely decline and steer back to academic topics
 - Always prioritize the student's learning and well-being
