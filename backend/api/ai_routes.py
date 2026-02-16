@@ -16,48 +16,6 @@ from models.firestore_models import ChatMessage
 ai_bp = Blueprint('ai', __name__, url_prefix='/api')
 
 
-# ═══════════════════════════════════════════════════════
-# DEBUG endpoint — will be removing in production
-# ═══════════════════════════════════════════════════════
-@ai_bp.route('/ai/debug-upload', methods=['POST'])
-def debug_upload():
-    """
-    POST /api/ai/debug-upload  (NO AUTH REQUIRED)
-    Test file upload processing. Send multipart/form-data with a 'file' field.
-    """
-    from services.file_service import FileService
-    
-    info = {
-        "content_type": request.content_type,
-        "content_length": request.content_length,
-        "files_keys": list(request.files.keys()) if request.files else [],
-        "form_keys": list(request.form.keys()) if request.form else [],
-    }
-    print(f"[DEBUG UPLOAD] Request info: {info}")
-    
-    if 'file' not in request.files:
-        info["error"] = "No 'file' key in request.files"
-        return jsonify(info), 400
-    
-    file = request.files['file']
-    file_content = file.read()
-    info["file_name"] = file.filename
-    info["file_content_type"] = file.content_type
-    info["file_size_bytes"] = len(file_content)
-    info["file_header_hex"] = file_content[:16].hex() if file_content else "EMPTY"
-    
-    print(f"[DEBUG UPLOAD] File: name={file.filename}, type={file.content_type}, size={len(file_content)}, header={info['file_header_hex']}")
-    
-    # Try extraction
-    extracted = FileService.process_uploaded_file(file_content, file.filename, file.content_type)
-    info["extracted_length"] = len(extracted) if extracted else 0
-    info["extracted_preview"] = extracted[:500] if extracted else None
-    
-    print(f"[DEBUG UPLOAD] Extraction result: {info['extracted_length']} chars")
-    
-    return jsonify(info), 200
-
-
 @ai_bp.route('/ai/context', methods=['GET'])
 @firebase_required
 def get_ai_context():
