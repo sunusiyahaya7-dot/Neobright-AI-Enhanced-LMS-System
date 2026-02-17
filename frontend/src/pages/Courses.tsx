@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { getCourses } from '../services/moodleService';
 import { progressService, ProgressOverview } from '../services/progressService';
 import Layout from '../components/Layout';
+import AIChatPanel from '../components/AIChatPanel';
 import {
   BookOpen,
   Clock,
@@ -67,6 +68,7 @@ export default function Courses() {
   const [searchQuery, setSearchQuery] = useState('');
   const [progressData, setProgressData] = useState<Record<number, ProgressOverview>>({});
   const [progressLoading, setProgressLoading] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
 
   useEffect(() => {
     fetchCourses();
@@ -378,6 +380,35 @@ export default function Courses() {
           </div>
         </div>
       </div>
+
+      {/* AI Chat Floating Button */}
+      {!chatOpen && (
+        <div className="fixed bottom-8 right-8 flex flex-col items-end gap-3 z-30 group">
+          <div className="bg-gray-900 dark:bg-gray-800 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+            Ask NeoBright AI
+          </div>
+          <button
+            onClick={() => setChatOpen(true)}
+            className="w-16 h-16 bg-gradient-to-br from-blue-500 via-blue-500 to-blue-600 hover:from-blue-600 hover:via-blue-600 hover:to-blue-700 text-white rounded-full flex items-center justify-center shadow-xl transition-all hover:scale-110 active:scale-95 z-30"
+            style={{ animation: 'subtle-float 4s ease-in-out 2s infinite' }}
+          >
+            <Sparkles className="w-8 h-8" />
+            <div className="absolute inset-0 rounded-full bg-blue-400 opacity-20 group-hover:opacity-40 transition-opacity" style={{ animation: 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite' }} />
+          </button>
+        </div>
+      )}
+
+      <style>{`
+        @keyframes subtle-float {
+          0%, 100% { transform: translateY(0px) rotate(0deg); }
+          25% { transform: translateY(-2px) rotate(-1deg); }
+          50% { transform: translateY(0px) rotate(0deg); }
+          75% { transform: translateY(-2px) rotate(1deg); }
+        }
+      `}</style>
+
+      {/* Chat Panel */}
+      <AIChatPanel isOpen={chatOpen} onClose={() => setChatOpen(false)} />
     </Layout>
   );
 }
