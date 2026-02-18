@@ -224,17 +224,24 @@ export default function CourseContent() {
 
   // Build dynamic quick queries from actual course data
   const quickQueries = useMemo(() => {
-    const firstSection = sections.find(s => (s.modules || []).length > 0);
-    const sectionName = firstSection?.section_name || 'Topic 1';
-    const latestModule = sections
-      .flatMap(s => s.modules || [])
-      .find(m => m.modname === 'resource' || m.modname === 'page');
-    const moduleName = latestModule?.name || 'the latest module';
+    // Skip generic sections like "General" — find a real topic section
+    const genericNames = ['general', 'announcements', 'news', ''];
+    const topicSection = sections.find(
+      s => (s.modules || []).length > 0 && !genericNames.includes((s.section_name || '').toLowerCase().trim())
+    );
+    const sectionName = topicSection?.section_name || 'Topic 1';
+
+    // Find a specific module (lecture, resource, lab, etc.)
+    const allModulesFlat = sections.flatMap(s => s.modules || []);
+    const contentModule = allModulesFlat.find(
+      m => m.modname === 'resource' || m.modname === 'page' || m.modname === 'assign'
+    );
+    const moduleName = contentModule?.name || 'the latest module';
 
     return [
-      { title: `Summarize ${sectionName}`, subtitle: 'Get a quick recap of key points', prompt: `Summarize the key concepts from "${sectionName}" in ${courseTitle}. Keep it concise and easy to understand.` },
+      { title: 'Summarize this lecture', subtitle: 'Get a quick recap of key points', prompt: `Summarize the key concepts from ${courseTitle}. Cover the main topics and keep it concise and easy to understand.` },
       { title: `Explain ${sectionName} in simpler terms`, subtitle: 'Break down complex concepts', prompt: `Explain the main concepts from "${sectionName}" in ${courseTitle} in simpler terms, as if explaining to a beginner.` },
-      { title: 'Generate quiz from this course', subtitle: 'Test your understanding', prompt: `Create a short quiz (3-5 questions) based on the content of ${courseTitle} to test my understanding. Include multiple choice and short answer questions.` },
+      { title: 'Generate quiz from this module', subtitle: 'Test your understanding', prompt: `Create a short quiz (3-5 questions) based on the content of ${courseTitle} to test my understanding. Include multiple choice and short answer questions.` },
       { title: `Show key points of ${moduleName}`, subtitle: 'Highlight important takeaways', prompt: `What are the key takeaways from "${moduleName}" in ${courseTitle}? List the most important points I should remember.` },
     ];
   }, [sections, courseTitle]);
