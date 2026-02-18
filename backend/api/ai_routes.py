@@ -3,6 +3,7 @@ AI Routes for NeoBright LMS.
 Provides AI-related endpoints including chat functionality.
 """
 import uuid
+import time
 from datetime import datetime
 from flask import Blueprint, jsonify, g, current_app, request
 from auth.firebase_auth import firebase_required
@@ -10,10 +11,29 @@ from services.ai_context_service import AIContextService
 from services.ai_service import AiService
 from services.ai_rate_limit_service import ai_rate_limit
 from services.firestore_service import FirestoreService
+from services.moodle_service import MoodleService
 from models.firestore_models import ChatMessage
 
 
 ai_bp = Blueprint('ai', __name__, url_prefix='/api')
+
+
+# ==================== IN-MEMORY CONTEXT CACHE ====================
+# Caches build_ai_context results for 5 minutes per user to avoid
+# re-fetching all Moodle progress data on every chat message.
+_context_cache: dict = {}        # {firebase_uid: {"data": ..., "ts": ...}}
+_CONTEXT_CACHE_TTL = 300         # 5 minutes
+
+
+def _get_cached_ai_context(firebase_uid: str) -> dict:
+    """Return cached AI context if fresh, otherwise build and cache it."""
+    cached = _context_cache.get(firebase_uid)
+    if cached and (time.time() - cached["ts"]) < _CONTEXT_CACHE_TTL:
+        return cached["data"]
+    
+    data = AIContextService.build_ai_context(firebase_uid)
+    _context_cache[firebase_uid] = {"data": data, "ts": time.time()}
+    return data
 
 
 @ai_bp.route('/ai/context', methods=['GET'])
@@ -197,13 +217,13 @@ def get_course_insights(course_id: int):
         
         print(f"Generating fresh course insights for user {firebase_uid}, course {course_id}")
         
-        # Build context
-        context_dict = AIContextService.build_ai_context(firebase_uid)
+        # Build context (cached 5min)
+        context_dict = _get_cached_ai_context(firebase_uid)
         
-        # Find this specific course in context
+        # Find this specific course in context (match by numeric moodle_id)
         target_course = None
         for c in context_dict.get('courses', []):
-            if c.get('id') == course_id:
+            if c.get('moodle_id') == course_id or c.get('id') == course_id:
                 target_course = c
                 break
         
@@ -411,8 +431,8 @@ def get_ai_insights():
         # Generate fresh insights
         print(f"Generating fresh insights for user {firebase_uid} (force={force_refresh})")
         
-        # Build AI context from aggregated data (returns dict)
-        context_dict = AIContextService.build_ai_context(firebase_uid)
+        # Build AI context from aggregated data (cached 5min)
+        context_dict = _get_cached_ai_context(firebase_uid)
         
         # Convert dict to StudentContext object
         context = StudentContext.from_dict(context_dict)
@@ -736,8 +756,8 @@ def send_message(chat_id: str):
             else:
                 ai_context_message = user_message_content
         
-        # Get student context for AI
-        context_dict = AIContextService.build_ai_context(firebase_uid)
+        # Get student context for AI (cached 5min to avoid Moodle spam)
+        context_dict = _get_cached_ai_context(firebase_uid)
         
         # Get previous messages for context (last 10)
         previous_messages = fs.get_chat_messages(chat_id)
@@ -851,6 +871,7 @@ def _generate_chat_response(
     
     # Build system prompt with student context
     assignments_text = _format_assignments_context(context.get('assignments', []))
+    course_content_text = _format_active_course_content(course_id)
     system_prompt = f"""You are NeoBright, a helpful AI learning assistant for university students.
 
 STUDENT CONTEXT:
@@ -860,6 +881,8 @@ STUDENT CONTEXT:
 - Enrolled Courses: {len(context.get('courses', []))}
 
 {_format_courses_context(context.get('courses', []), course_id)}
+
+{course_content_text}
 
 {assignments_text}
 
@@ -880,11 +903,9 @@ GUIDELINES:
 
 QUIZ & LEARNING GUIDELINES:
 - When a student asks to be quizzed ("Quiz Me", "create a quiz", "test me", etc.):
-  - FIRST, ask which specific lecture, topic, or chapter they want to be quizzed on
-  - THEN, ask them to upload lecture notes/materials OR provide the topic content
-  - Do NOT create quizzes without specific content to base them on
-  - Explain that you need the specific material to create relevant questions
-  - If they mention a course name (e.g., "Parallel Computing"), ask for the specific topic/lecture number
+  - If COURSE CONTENT STRUCTURE is available above, use the section and module names to generate relevant quiz questions based on those topics
+  - If the student mentions a specific topic/section name from the COURSE CONTENT, create questions based on that topic's modules
+  - Only ask for uploaded materials if you truly have no course content context at all
   - When a student uploads a file and asks you to quiz them on it, extract the key concepts and create 3-5 questions based on that content
   - Make sure quiz questions are directly relevant to the provided material and not generic questions about the course
   - When creating quiz questions, provide a mix of question types (e.g., multiple choice, short answer) and cover different aspects of the material (definitions, applications, implications)
@@ -892,17 +913,17 @@ QUIZ & LEARNING GUIDELINES:
   - When displaying quiz results, provide explanations for correct and incorrect answers to enhance learning 
   - Display the Quiz Questions and Answers beautifully using markdown and emojis for better engagement
 
-- When a student asks to summarize a topic:
-  - Ask which specific topic or lecture they want summarized
-  - Ask them to provide the material/notes if needed
-- Use the student's course names from context when suggesting topics
-
-- If a student asked you to "summarize this topic for me", ask clarifying questions about which aspects they want summarized before providing an answer
-  - Summarize it very concisely, focusing on key points and main ideas
-  - Always cite the source of information if it was provided in the context 
-  - Summaries in a way that even a baby will be able to understand properly
-  - For summaries, only use bullet points (for main points use numbers and make sure they are in order (e.g 1,2,3 ...) or numerals to differentiate) where necessary; prefer short paragraphs and clear explanations aligned with the content provided
-  - if asked to summarize again, provide a more concise paragraph summary focusing on the absolute essentials.
+SUMMARIZATION & TOPIC EXPLANATION GUIDELINES:
+- When a student asks to summarize or explain a topic:
+  - If COURSE CONTENT STRUCTURE is available above, use the section/module names to identify what the topic covers
+  - Use the module names (lectures, labs, resources) listed under each section as context clues for what the topic teaches
+  - Explain based on your general knowledge of the subject matter, referencing the specific modules/lectures under that topic
+  - Do NOT ask the student to provide materials if you already have the course structure — use the module/lecture names as guidance
+  - Only ask for uploaded notes if the topic is highly specialized and you have zero course content context
+- Summarize concisely, focusing on key points and main ideas
+- For summaries, use numbered points for main ideas and bullet points for details
+- Summaries should be clear enough for a beginner to understand
+- If asked to summarize again, provide an even more concise version focusing on the absolute essentials
 - Never make up information not in the context
 - If asked anything that is not related to learning or courses, politely decline and steer back to academic topics
 - Always prioritize the student's learning and well-being
@@ -948,13 +969,52 @@ def _format_courses_context(courses: list, active_course_id: int | None) -> str:
     
     lines = ["COURSES:"]
     for course in courses:
-        marker = "→ " if course.get("id") == active_course_id else "  "
+        marker = "→ " if (course.get("moodle_id") == active_course_id or course.get("id") == active_course_id) else "  "
         score_str = f", Avg: {course.get('averageScore')}%" if course.get('averageScore') else ""
         lines.append(
             f"{marker}{course.get('name', 'Unknown')} - Progress: {course.get('progress', 0)}%{score_str}"
         )
     
     return "\n".join(lines)
+
+
+def _format_active_course_content(course_id: int | None) -> str:
+    """Fetch and format sections/modules for the active course so the AI can discuss topics."""
+    if not course_id:
+        return ""
+    
+    try:
+        contents = MoodleService.get_course_contents(course_id)
+        if not contents:
+            return ""
+        
+        lines = ["COURSE CONTENT STRUCTURE (sections and modules for the active course):"]
+        for section in contents:
+            section_name = section.get("name", "Unnamed Section")
+            modules = section.get("modules", [])
+            if not modules:
+                continue
+            lines.append(f"\n  Section: {section_name}")
+            for mod in modules:
+                mod_name = mod.get("name", "Unnamed")
+                mod_type = mod.get("modname", "resource")
+                description = mod.get("description", "")
+                line = f"    - [{mod_type}] {mod_name}"
+                if description:
+                    # Truncate long descriptions to save tokens
+                    clean_desc = description[:200].replace("\n", " ").strip()
+                    line += f" — {clean_desc}"
+                lines.append(line)
+        
+        if len(lines) == 1:
+            return ""  # No actual content found
+        
+        lines.append("\nUse this structure to answer questions about specific sections/topics in this course.")
+        return "\n".join(lines)
+    
+    except Exception as e:
+        print(f"Error fetching course content for prompt: {e}")
+        return ""
 
 
 def _format_assignments_context(assignments: list) -> str:
