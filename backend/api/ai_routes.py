@@ -3,6 +3,7 @@ AI Routes for NeoBright LMS.
 Provides AI-related endpoints including chat functionality.
 """
 import uuid
+import time
 from datetime import datetime
 from flask import Blueprint, jsonify, g, current_app, request
 from auth.firebase_auth import firebase_required
@@ -10,10 +11,29 @@ from services.ai_context_service import AIContextService
 from services.ai_service import AiService
 from services.ai_rate_limit_service import ai_rate_limit
 from services.firestore_service import FirestoreService
+from services.moodle_service import MoodleService
 from models.firestore_models import ChatMessage
 
 
 ai_bp = Blueprint('ai', __name__, url_prefix='/api')
+
+
+# ==================== IN-MEMORY CONTEXT CACHE ====================
+# Caches build_ai_context results for 5 minutes per user to avoid
+# re-fetching all Moodle progress data on every chat message.
+_context_cache: dict = {}        # {firebase_uid: {"data": ..., "ts": ...}}
+_CONTEXT_CACHE_TTL = 300         # 5 minutes
+
+
+def _get_cached_ai_context(firebase_uid: str) -> dict:
+    """Return cached AI context if fresh, otherwise build and cache it."""
+    cached = _context_cache.get(firebase_uid)
+    if cached and (time.time() - cached["ts"]) < _CONTEXT_CACHE_TTL:
+        return cached["data"]
+    
+    data = AIContextService.build_ai_context(firebase_uid)
+    _context_cache[firebase_uid] = {"data": data, "ts": time.time()}
+    return data
 
 
 @ai_bp.route('/ai/context', methods=['GET'])
@@ -99,6 +119,259 @@ def _save_insights_cache(firebase_uid: str, insights: dict) -> None:
     })
 
 
+# ==================== COURSE-SPECIFIC INSIGHTS ====================
+
+COURSE_INSIGHTS_CACHE_HOURS = 6
+
+
+def _get_cached_course_insights(firebase_uid: str, course_id: int) -> dict | None:
+    """Retrieve cached course-specific insights if not stale."""
+    from datetime import datetime, timedelta, timezone
+    
+    fs = FirestoreService()
+    doc_id = f"{firebase_uid}_{course_id}"
+    doc = fs.db.collection('ai_course_insights_cache').document(doc_id).get()
+    
+    if not doc.exists:
+        return None
+    
+    data = doc.to_dict()
+    cached_at = data.get('cached_at')
+    
+    if not cached_at:
+        return None
+    
+    now = datetime.now(timezone.utc)
+    if cached_at.tzinfo is None:
+        cached_at = cached_at.replace(tzinfo=timezone.utc)
+    
+    cache_age = now - cached_at
+    if cache_age > timedelta(hours=COURSE_INSIGHTS_CACHE_HOURS):
+        return None
+    
+    return data.get('insights')
+
+
+def _save_course_insights_cache(firebase_uid: str, course_id: int, insights: dict) -> None:
+    """Save course-specific insights to cache."""
+    from datetime import datetime, timezone
+    
+    fs = FirestoreService()
+    doc_id = f"{firebase_uid}_{course_id}"
+    fs.db.collection('ai_course_insights_cache').document(doc_id).set({
+        'insights': insights,
+        'cached_at': datetime.now(timezone.utc),
+        'user_id': firebase_uid,
+        'course_id': course_id
+    })
+
+
+@ai_bp.route('/ai/courses/<int:course_id>/insights', methods=['GET'])
+@firebase_required
+def get_course_insights(course_id: int):
+    """
+    GET /api/ai/courses/<course_id>/insights
+    
+    Returns AI-generated insights specific to a single course.
+    Cached in Firestore for 6 hours per user+course.
+    
+    Query params:
+    - force=true: Skip cache and regenerate
+    
+    Returns:
+    {
+        "insights": ["bullet 1", "bullet 2", ...],
+        "study_tip": "...",
+        "cached": true/false,
+        "cache_expires_at": "..."
+    }
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+        from services.ai_rate_limit_service import check_rate_limit
+        
+        firebase_uid = g.firebase_uid
+        force_refresh = request.args.get('force', '').lower() == 'true'
+        
+        # Try cache first
+        if not force_refresh:
+            cached = _get_cached_course_insights(firebase_uid, course_id)
+            if cached:
+                cached['cached'] = True
+                fs = FirestoreService()
+                doc_id = f"{firebase_uid}_{course_id}"
+                doc = fs.db.collection('ai_course_insights_cache').document(doc_id).get()
+                if doc.exists:
+                    cached_at = doc.to_dict().get('cached_at')
+                    if cached_at:
+                        expires_at = cached_at + timedelta(hours=COURSE_INSIGHTS_CACHE_HOURS)
+                        cached['cache_expires_at'] = expires_at.isoformat() + 'Z'
+                
+                print(f"Returning cached course insights for user {firebase_uid}, course {course_id}")
+                return jsonify(cached), 200
+        
+        # Rate limit for fresh generation
+        rate_limit_error = check_rate_limit(firebase_uid)
+        if rate_limit_error:
+            return jsonify({"error": rate_limit_error}), 429
+        
+        print(f"Generating fresh course insights for user {firebase_uid}, course {course_id}")
+        
+        # Build context (cached 5min)
+        context_dict = _get_cached_ai_context(firebase_uid)
+        
+        # Find this specific course in context (match by numeric moodle_id)
+        target_course = None
+        for c in context_dict.get('courses', []):
+            if c.get('moodle_id') == course_id or c.get('id') == course_id:
+                target_course = c
+                break
+        
+        if not target_course:
+            return jsonify({
+                "insights": ["This course was not found in your enrollment data."],
+                "study_tip": "Make sure you're enrolled in this course on Moodle.",
+                "cached": False
+            }), 200
+        
+        # Get assignments for this course (assignments use course name, not ID)
+        course_name = target_course.get('name', '')
+        course_assignments = [
+            a for a in context_dict.get('assignments', [])
+            if a.get('course', '') == course_name
+        ]
+        
+        # Generate using OpenAI
+        insights_data = _generate_course_insights(
+            target_course, course_assignments, context_dict, current_app.config
+        )
+        
+        # Cache
+        _save_course_insights_cache(firebase_uid, course_id, insights_data)
+        
+        insights_data['cached'] = False
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=COURSE_INSIGHTS_CACHE_HOURS)
+        insights_data['cache_expires_at'] = expires_at.isoformat() + 'Z'
+        
+        return jsonify(insights_data), 200
+    
+    except Exception as e:
+        print(f"Error generating course insights: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+def _generate_course_insights(
+    course: dict, assignments: list, full_context: dict, app_config: dict
+) -> dict:
+    """Generate AI insights for a specific course."""
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return _fallback_course_insights(course)
+    
+    api_key = app_config.get("OPENAI_API_KEY")
+    if not api_key:
+        return _fallback_course_insights(course)
+    
+    # Build compact prompt
+    student_name = full_context.get('student', {}).get('name', 'Student')
+    progress = course.get('progress', 0)
+    avg_score = course.get('averageScore')
+    completed = course.get('completedActivities', 0)
+    total = course.get('totalActivities', 0)
+    
+    assignments_text = ""
+    if assignments:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        lines = []
+        for a in assignments:
+            status = a.get('status', 'not submitted')
+            name = a.get('name', 'Unknown')
+            duedate_ts = a.get('duedate_ts', 0)
+            if duedate_ts:
+                due_dt = datetime.utcfromtimestamp(duedate_ts).replace(tzinfo=timezone.utc)
+                days_diff = (due_dt - now).days
+                lines.append(f"- {name}: {status}, due in {days_diff} days")
+            else:
+                lines.append(f"- {name}: {status}")
+        assignments_text = "\n".join(lines)
+    
+    prompt = f"""Analyze this student's status in a specific course and provide personalized insights.
+
+STUDENT: {student_name}
+COURSE: {course.get('name', 'Unknown')} ({course.get('id', '')})
+PROGRESS: {progress}% ({completed}/{total} activities completed)
+AVERAGE SCORE: {avg_score if avg_score is not None else 'Not yet graded'}
+
+ASSIGNMENTS:
+{assignments_text if assignments_text else 'No assignments data available'}
+
+Generate a JSON response with:
+1. "insights": An array of 3-4 short, specific bullet points about the student's status in THIS course. Address the student directly with "you/your". Examples:
+   - "You've completed 3/5 lab modules"
+   - "You haven't accessed Topic 3 yet"
+   - "Try completing the next assignment before the deadline"
+2. "study_tip": A single short, actionable study tip specific to this course and the student's current progress.
+
+Return ONLY valid JSON, no markdown, no extra text.
+"""
+    
+    try:
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=app_config.get("AI_MODEL", "gpt-4o-mini"),
+            messages=[
+                {"role": "system", "content": "You are NeoBright, a supportive AI learning coach. Always address the student directly using 'you' and 'your'. Be specific and actionable. Return ONLY valid JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.5,
+            max_tokens=400
+        )
+        
+        import json
+        raw = response.choices[0].message.content.strip()
+        # Strip markdown code fences if present
+        if raw.startswith('```'):
+            raw = raw.split('\n', 1)[1] if '\n' in raw else raw[3:]
+            if raw.endswith('```'):
+                raw = raw[:-3]
+            raw = raw.strip()
+        
+        result = json.loads(raw)
+        return {
+            "insights": result.get("insights", []),
+            "study_tip": result.get("study_tip", "Keep up the good work!")
+        }
+    
+    except Exception as e:
+        print(f"Course insights generation error: {e}")
+        return _fallback_course_insights(course)
+
+
+def _fallback_course_insights(course: dict) -> dict:
+    """Fallback when AI is unavailable."""
+    progress = course.get('progress', 0)
+    completed = course.get('completedActivities', 0)
+    total = course.get('totalActivities', 0)
+    name = course.get('name', 'this course')
+    
+    insights = [f"You've completed {completed}/{total} activities in {name}"]
+    if progress < 50:
+        insights.append("Your progress is below 50% - try to catch up this week")
+        tip = f"Set aside dedicated time to work through the remaining modules in {name}."
+    elif progress < 100:
+        insights.append(f"You're at {progress}% — keep going!")
+        tip = f"You're making good progress. Try to complete the next activity in {name} today."
+    else:
+        insights.append("Great job — you've completed all activities!")
+        tip = "Review the material to solidify your understanding before any exams."
+    
+    return {"insights": insights, "study_tip": tip}
+
+
 @ai_bp.route('/ai/insights', methods=['GET'])
 @firebase_required
 def get_ai_insights():
@@ -158,8 +431,8 @@ def get_ai_insights():
         # Generate fresh insights
         print(f"Generating fresh insights for user {firebase_uid} (force={force_refresh})")
         
-        # Build AI context from aggregated data (returns dict)
-        context_dict = AIContextService.build_ai_context(firebase_uid)
+        # Build AI context from aggregated data (cached 5min)
+        context_dict = _get_cached_ai_context(firebase_uid)
         
         # Convert dict to StudentContext object
         context = StudentContext.from_dict(context_dict)
@@ -483,8 +756,8 @@ def send_message(chat_id: str):
             else:
                 ai_context_message = user_message_content
         
-        # Get student context for AI
-        context_dict = AIContextService.build_ai_context(firebase_uid)
+        # Get student context for AI (cached 5min to avoid Moodle spam)
+        context_dict = _get_cached_ai_context(firebase_uid)
         
         # Get previous messages for context (last 10)
         previous_messages = fs.get_chat_messages(chat_id)
@@ -598,6 +871,7 @@ def _generate_chat_response(
     
     # Build system prompt with student context
     assignments_text = _format_assignments_context(context.get('assignments', []))
+    course_content_text = _format_active_course_content(course_id)
     system_prompt = f"""You are NeoBright, a helpful AI learning assistant for university students.
 
 STUDENT CONTEXT:
@@ -607,6 +881,8 @@ STUDENT CONTEXT:
 - Enrolled Courses: {len(context.get('courses', []))}
 
 {_format_courses_context(context.get('courses', []), course_id)}
+
+{course_content_text}
 
 {assignments_text}
 
@@ -627,11 +903,9 @@ GUIDELINES:
 
 QUIZ & LEARNING GUIDELINES:
 - When a student asks to be quizzed ("Quiz Me", "create a quiz", "test me", etc.):
-  - FIRST, ask which specific lecture, topic, or chapter they want to be quizzed on
-  - THEN, ask them to upload lecture notes/materials OR provide the topic content
-  - Do NOT create quizzes without specific content to base them on
-  - Explain that you need the specific material to create relevant questions
-  - If they mention a course name (e.g., "Parallel Computing"), ask for the specific topic/lecture number
+  - If COURSE CONTENT STRUCTURE is available above, use the section and module names to generate relevant quiz questions based on those topics
+  - If the student mentions a specific topic/section name from the COURSE CONTENT, create questions based on that topic's modules
+  - Only ask for uploaded materials if you truly have no course content context at all
   - When a student uploads a file and asks you to quiz them on it, extract the key concepts and create 3-5 questions based on that content
   - Make sure quiz questions are directly relevant to the provided material and not generic questions about the course
   - When creating quiz questions, provide a mix of question types (e.g., multiple choice, short answer) and cover different aspects of the material (definitions, applications, implications)
@@ -639,17 +913,17 @@ QUIZ & LEARNING GUIDELINES:
   - When displaying quiz results, provide explanations for correct and incorrect answers to enhance learning 
   - Display the Quiz Questions and Answers beautifully using markdown and emojis for better engagement
 
-- When a student asks to summarize a topic:
-  - Ask which specific topic or lecture they want summarized
-  - Ask them to provide the material/notes if needed
-- Use the student's course names from context when suggesting topics
-
-- If a student asked you to "summarize this topic for me", ask clarifying questions about which aspects they want summarized before providing an answer
-  - Summarize it very concisely, focusing on key points and main ideas
-  - Always cite the source of information if it was provided in the context 
-  - Summaries in a way that even a baby will be able to understand properly
-  - For summaries, only use bullet points (for main points use numbers and make sure they are in order (e.g 1,2,3 ...) or numerals to differentiate) where necessary; prefer short paragraphs and clear explanations aligned with the content provided
-  - if asked to summarize again, provide a more concise paragraph summary focusing on the absolute essentials.
+SUMMARIZATION & TOPIC EXPLANATION GUIDELINES:
+- When a student asks to summarize or explain a topic:
+  - If COURSE CONTENT STRUCTURE is available above, use the section/module names to identify what the topic covers
+  - Use the module names (lectures, labs, resources) listed under each section as context clues for what the topic teaches
+  - Explain based on your general knowledge of the subject matter, referencing the specific modules/lectures under that topic
+  - Do NOT ask the student to provide materials if you already have the course structure — use the module/lecture names as guidance
+  - Only ask for uploaded notes if the topic is highly specialized and you have zero course content context
+- Summarize concisely, focusing on key points and main ideas
+- For summaries, use numbered points for main ideas and bullet points for details
+- Summaries should be clear enough for a beginner to understand
+- If asked to summarize again, provide an even more concise version focusing on the absolute essentials
 - Never make up information not in the context
 - If asked anything that is not related to learning or courses, politely decline and steer back to academic topics
 - Always prioritize the student's learning and well-being
@@ -695,13 +969,52 @@ def _format_courses_context(courses: list, active_course_id: int | None) -> str:
     
     lines = ["COURSES:"]
     for course in courses:
-        marker = "→ " if course.get("id") == active_course_id else "  "
+        marker = "→ " if (course.get("moodle_id") == active_course_id or course.get("id") == active_course_id) else "  "
         score_str = f", Avg: {course.get('averageScore')}%" if course.get('averageScore') else ""
         lines.append(
             f"{marker}{course.get('name', 'Unknown')} - Progress: {course.get('progress', 0)}%{score_str}"
         )
     
     return "\n".join(lines)
+
+
+def _format_active_course_content(course_id: int | None) -> str:
+    """Fetch and format sections/modules for the active course so the AI can discuss topics."""
+    if not course_id:
+        return ""
+    
+    try:
+        contents = MoodleService.get_course_contents(course_id)
+        if not contents:
+            return ""
+        
+        lines = ["COURSE CONTENT STRUCTURE (sections and modules for the active course):"]
+        for section in contents:
+            section_name = section.get("name", "Unnamed Section")
+            modules = section.get("modules", [])
+            if not modules:
+                continue
+            lines.append(f"\n  Section: {section_name}")
+            for mod in modules:
+                mod_name = mod.get("name", "Unnamed")
+                mod_type = mod.get("modname", "resource")
+                description = mod.get("description", "")
+                line = f"    - [{mod_type}] {mod_name}"
+                if description:
+                    # Truncate long descriptions to save tokens
+                    clean_desc = description[:200].replace("\n", " ").strip()
+                    line += f" — {clean_desc}"
+                lines.append(line)
+        
+        if len(lines) == 1:
+            return ""  # No actual content found
+        
+        lines.append("\nUse this structure to answer questions about specific sections/topics in this course.")
+        return "\n".join(lines)
+    
+    except Exception as e:
+        print(f"Error fetching course content for prompt: {e}")
+        return ""
 
 
 def _format_assignments_context(assignments: list) -> str:
