@@ -11,6 +11,7 @@ from services.ai_context_service import AIContextService
 from services.ai_service import AiService
 from services.ai_rate_limit_service import ai_rate_limit
 from services.firestore_service import FirestoreService
+from services.moodle_service import MoodleService
 from models.firestore_models import ChatMessage
 
 
@@ -219,10 +220,10 @@ def get_course_insights(course_id: int):
         # Build context (cached 5min)
         context_dict = _get_cached_ai_context(firebase_uid)
         
-        # Find this specific course in context
+        # Find this specific course in context (match by numeric moodle_id)
         target_course = None
         for c in context_dict.get('courses', []):
-            if c.get('id') == course_id:
+            if c.get('moodle_id') == course_id or c.get('id') == course_id:
                 target_course = c
                 break
         
@@ -968,7 +969,7 @@ def _format_courses_context(courses: list, active_course_id: int | None) -> str:
     
     lines = ["COURSES:"]
     for course in courses:
-        marker = "→ " if course.get("id") == active_course_id else "  "
+        marker = "→ " if (course.get("moodle_id") == active_course_id or course.get("id") == active_course_id) else "  "
         score_str = f", Avg: {course.get('averageScore')}%" if course.get('averageScore') else ""
         lines.append(
             f"{marker}{course.get('name', 'Unknown')} - Progress: {course.get('progress', 0)}%{score_str}"

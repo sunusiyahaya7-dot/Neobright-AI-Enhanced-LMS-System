@@ -19,6 +19,7 @@ interface ChatMessageProps {
   file?: FileAttachment;
   actions?: ChatAction[];
   isProcessing?: boolean;
+  processingLabel?: string;
 }
 
 /**
@@ -151,7 +152,7 @@ function FileCard({ file }: { file: FileAttachment }) {
 }
 
 /** Processing indicator for "Reading document..." */
-function ProcessingIndicator() {
+function ProcessingIndicator({ label }: { label?: string }) {
   return (
     <div className="flex items-center gap-2 px-4 py-3">
       <div className="flex gap-1">
@@ -159,12 +160,12 @@ function ProcessingIndicator() {
         <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
         <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
       </div>
-      <span className="text-sm text-gray-500 dark:text-gray-400 italic">Reading document...</span>
+      <span className="text-sm text-gray-500 dark:text-gray-400 italic">{label || 'Thinking...'}</span>
     </div>
   );
 }
 
-export default function ChatMessage({ role, content, timestamp, file, actions, isProcessing }: ChatMessageProps) {
+export default function ChatMessage({ role, content, timestamp, file, actions, isProcessing, processingLabel }: ChatMessageProps) {
   const isUser = role === 'user';
   const timeAgo = formatTimeAgo(timestamp);
 
@@ -180,7 +181,7 @@ export default function ChatMessage({ role, content, timestamp, file, actions, i
             <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">NeoBright AI</span>
           </div>
           <div className="rounded-2xl bg-gray-100 dark:bg-[#2A2D32] rounded-bl-sm">
-            <ProcessingIndicator />
+            <ProcessingIndicator label={processingLabel} />
           </div>
         </div>
       </div>

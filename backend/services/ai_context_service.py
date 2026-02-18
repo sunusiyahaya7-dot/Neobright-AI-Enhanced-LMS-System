@@ -111,6 +111,7 @@ class AIContextService:
                     
                     course_context = {
                         "id": course.get("shortname", str(course.get("id"))),
+                        "moodle_id": course.get("id"),
                         "name": course.get("fullname", "Unknown"),
                         "progress": cached_progress.get("progress", 0),
                         "averageScore": avg_score,  # None if no grades yet
