@@ -31,15 +31,16 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
   const [rateLimitCountdown, setRateLimitCountdown] = useState(0);
   const [selectedAction, setSelectedAction] = useState<string | null>(null);
   const [lastUserId, setLastUserId] = useState<string | null>(null);
-  const [initialMessageSent, setInitialMessageSent] = useState(false);
+  const lastSentPrompt = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const quickActionsRef = useRef<HTMLDivElement>(null);
 
   // Detect user/session change and create new chat
   useEffect(() => {
     if (user?.uid && user.uid !== lastUserId) {
-      // User has changed or logged in - clear previous session
-      localStorage.removeItem('activeChatId');
+      // User has changed or logged in - clear all chat sessions
+      const keysToRemove = Object.keys(localStorage).filter(k => k.startsWith('activeChatId'));
+      keysToRemove.forEach(k => localStorage.removeItem(k));
       setChatSession(null);
       setMessages([]);
       setLastUserId(user.uid);
@@ -53,19 +54,37 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
         setLoading(true);
         setError(null);
 
-        // Check for cached chat ID
-        const cachedChatId = localStorage.getItem('activeChatId');
+        // Use course-specific localStorage key so each course has its own chat
+        const storageKey = courseId ? `activeChatId_${courseId}` : 'activeChatId';
+        const cachedChatId = localStorage.getItem(storageKey);
 
         if (cachedChatId) {
           // Load existing chat
-          const chat = await aiChatService.getChat(cachedChatId);
-          setChatSession(chat);
-          setMessages(chat.messages || []);
+          try {
+            const chat = await aiChatService.getChat(cachedChatId);
+            setChatSession(chat);
+            setMessages(chat.messages || []);
+          } catch {
+            // Chat not found (deleted/expired) — create a new one
+            localStorage.removeItem(storageKey);
+            const newChat = await aiChatService.createChat({
+              courseId,
+              title: courseId ? `Course ${courseId} Chat` : 'Dashboard Chat'
+            });
+            setChatSession(newChat);
+            const welcomeMessage: IChatMessage = {
+              role: 'assistant',
+              content: "Hi! I'm NeoBright AI, your learning assistant. How can I help you today?",
+              timestamp: new Date().toISOString()
+            };
+            setMessages([welcomeMessage]);
+            localStorage.setItem(storageKey, newChat.chatId);
+          }
         } else {
           // Create new chat
           const newChat = await aiChatService.createChat({
             courseId,
-            title: 'Dashboard Chat'
+            title: courseId ? `Course ${courseId} Chat` : 'Dashboard Chat'
           });
           setChatSession(newChat);
           
@@ -77,7 +96,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
           };
           setMessages([welcomeMessage]);
           
-          localStorage.setItem('activeChatId', newChat.chatId);
+          localStorage.setItem(storageKey, newChat.chatId);
         }
       } catch (err: any) {
         setError(err.message || 'Failed to load chat');
@@ -91,13 +110,19 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
     }
   }, [isOpen, courseId]);
 
-  // Auto-send initial message when provided and chat is ready
+  // Auto-send initial message when provided and chat is ready (single effect, ref-guarded)
   useEffect(() => {
-    if (initialMessage && chatSession && !loading && !initialMessageSent) {
-      setInitialMessageSent(true);
+    if (
+      initialMessage &&
+      chatSession &&
+      !loading &&
+      !sendingMessage &&
+      lastSentPrompt.current !== initialMessage
+    ) {
+      lastSentPrompt.current = initialMessage;
       handleSendMessage(initialMessage);
     }
-  }, [initialMessage, chatSession, loading, initialMessageSent]);
+  }, [initialMessage, chatSession, loading]);
 
   // Auto-scroll to latest message
   useEffect(() => {
@@ -187,6 +212,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
   };
 
   const handleClose = () => {
+    lastSentPrompt.current = null;
     onClose();
   };
 
@@ -322,13 +348,14 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
                   />
                 );
               })}
-              {/* Processing indicator when reading a document */}
-              {processingFile && (
+              {/* Thinking indicator while AI is generating response */}
+              {(sendingMessage || processingFile) && (
                 <ChatMessage
                   role="assistant"
                   content=""
                   timestamp={new Date().toISOString()}
                   isProcessing={true}
+                  processingLabel={processingFile ? 'Reading document...' : 'Thinking...'}
                 />
               )}
               <div ref={messagesEndRef} />
