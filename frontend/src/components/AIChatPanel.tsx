@@ -31,7 +31,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
   const [rateLimitCountdown, setRateLimitCountdown] = useState(0);
   const [selectedAction, setSelectedAction] = useState<string | null>(null);
   const [lastUserId, setLastUserId] = useState<string | null>(null);
-  const [initialMessageSent, setInitialMessageSent] = useState(false);
+  const lastSentPrompt = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const quickActionsRef = useRef<HTMLDivElement>(null);
 
@@ -91,13 +91,19 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
     }
   }, [isOpen, courseId]);
 
-  // Auto-send initial message when provided and chat is ready
+  // Auto-send initial message when provided and chat is ready (single effect, ref-guarded)
   useEffect(() => {
-    if (initialMessage && chatSession && !loading && !initialMessageSent) {
-      setInitialMessageSent(true);
+    if (
+      initialMessage &&
+      chatSession &&
+      !loading &&
+      !sendingMessage &&
+      lastSentPrompt.current !== initialMessage
+    ) {
+      lastSentPrompt.current = initialMessage;
       handleSendMessage(initialMessage);
     }
-  }, [initialMessage, chatSession, loading, initialMessageSent]);
+  }, [initialMessage, chatSession, loading]);
 
   // Auto-scroll to latest message
   useEffect(() => {
@@ -187,6 +193,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
   };
 
   const handleClose = () => {
+    lastSentPrompt.current = null;
     onClose();
   };
 
