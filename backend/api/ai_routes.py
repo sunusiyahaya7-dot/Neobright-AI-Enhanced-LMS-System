@@ -99,6 +99,259 @@ def _save_insights_cache(firebase_uid: str, insights: dict) -> None:
     })
 
 
+# ==================== COURSE-SPECIFIC INSIGHTS ====================
+
+COURSE_INSIGHTS_CACHE_HOURS = 6
+
+
+def _get_cached_course_insights(firebase_uid: str, course_id: int) -> dict | None:
+    """Retrieve cached course-specific insights if not stale."""
+    from datetime import datetime, timedelta, timezone
+    
+    fs = FirestoreService()
+    doc_id = f"{firebase_uid}_{course_id}"
+    doc = fs.db.collection('ai_course_insights_cache').document(doc_id).get()
+    
+    if not doc.exists:
+        return None
+    
+    data = doc.to_dict()
+    cached_at = data.get('cached_at')
+    
+    if not cached_at:
+        return None
+    
+    now = datetime.now(timezone.utc)
+    if cached_at.tzinfo is None:
+        cached_at = cached_at.replace(tzinfo=timezone.utc)
+    
+    cache_age = now - cached_at
+    if cache_age > timedelta(hours=COURSE_INSIGHTS_CACHE_HOURS):
+        return None
+    
+    return data.get('insights')
+
+
+def _save_course_insights_cache(firebase_uid: str, course_id: int, insights: dict) -> None:
+    """Save course-specific insights to cache."""
+    from datetime import datetime, timezone
+    
+    fs = FirestoreService()
+    doc_id = f"{firebase_uid}_{course_id}"
+    fs.db.collection('ai_course_insights_cache').document(doc_id).set({
+        'insights': insights,
+        'cached_at': datetime.now(timezone.utc),
+        'user_id': firebase_uid,
+        'course_id': course_id
+    })
+
+
+@ai_bp.route('/ai/courses/<int:course_id>/insights', methods=['GET'])
+@firebase_required
+def get_course_insights(course_id: int):
+    """
+    GET /api/ai/courses/<course_id>/insights
+    
+    Returns AI-generated insights specific to a single course.
+    Cached in Firestore for 6 hours per user+course.
+    
+    Query params:
+    - force=true: Skip cache and regenerate
+    
+    Returns:
+    {
+        "insights": ["bullet 1", "bullet 2", ...],
+        "study_tip": "...",
+        "cached": true/false,
+        "cache_expires_at": "..."
+    }
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+        from services.ai_rate_limit_service import check_rate_limit
+        
+        firebase_uid = g.firebase_uid
+        force_refresh = request.args.get('force', '').lower() == 'true'
+        
+        # Try cache first
+        if not force_refresh:
+            cached = _get_cached_course_insights(firebase_uid, course_id)
+            if cached:
+                cached['cached'] = True
+                fs = FirestoreService()
+                doc_id = f"{firebase_uid}_{course_id}"
+                doc = fs.db.collection('ai_course_insights_cache').document(doc_id).get()
+                if doc.exists:
+                    cached_at = doc.to_dict().get('cached_at')
+                    if cached_at:
+                        expires_at = cached_at + timedelta(hours=COURSE_INSIGHTS_CACHE_HOURS)
+                        cached['cache_expires_at'] = expires_at.isoformat() + 'Z'
+                
+                print(f"Returning cached course insights for user {firebase_uid}, course {course_id}")
+                return jsonify(cached), 200
+        
+        # Rate limit for fresh generation
+        rate_limit_error = check_rate_limit(firebase_uid)
+        if rate_limit_error:
+            return jsonify({"error": rate_limit_error}), 429
+        
+        print(f"Generating fresh course insights for user {firebase_uid}, course {course_id}")
+        
+        # Build context
+        context_dict = AIContextService.build_ai_context(firebase_uid)
+        
+        # Find this specific course in context
+        target_course = None
+        for c in context_dict.get('courses', []):
+            if c.get('id') == course_id:
+                target_course = c
+                break
+        
+        if not target_course:
+            return jsonify({
+                "insights": ["This course was not found in your enrollment data."],
+                "study_tip": "Make sure you're enrolled in this course on Moodle.",
+                "cached": False
+            }), 200
+        
+        # Get assignments for this course (assignments use course name, not ID)
+        course_name = target_course.get('name', '')
+        course_assignments = [
+            a for a in context_dict.get('assignments', [])
+            if a.get('course', '') == course_name
+        ]
+        
+        # Generate using OpenAI
+        insights_data = _generate_course_insights(
+            target_course, course_assignments, context_dict, current_app.config
+        )
+        
+        # Cache
+        _save_course_insights_cache(firebase_uid, course_id, insights_data)
+        
+        insights_data['cached'] = False
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=COURSE_INSIGHTS_CACHE_HOURS)
+        insights_data['cache_expires_at'] = expires_at.isoformat() + 'Z'
+        
+        return jsonify(insights_data), 200
+    
+    except Exception as e:
+        print(f"Error generating course insights: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+def _generate_course_insights(
+    course: dict, assignments: list, full_context: dict, app_config: dict
+) -> dict:
+    """Generate AI insights for a specific course."""
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return _fallback_course_insights(course)
+    
+    api_key = app_config.get("OPENAI_API_KEY")
+    if not api_key:
+        return _fallback_course_insights(course)
+    
+    # Build compact prompt
+    student_name = full_context.get('student', {}).get('name', 'Student')
+    progress = course.get('progress', 0)
+    avg_score = course.get('averageScore')
+    completed = course.get('completedActivities', 0)
+    total = course.get('totalActivities', 0)
+    
+    assignments_text = ""
+    if assignments:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        lines = []
+        for a in assignments:
+            status = a.get('status', 'not submitted')
+            name = a.get('name', 'Unknown')
+            duedate_ts = a.get('duedate_ts', 0)
+            if duedate_ts:
+                due_dt = datetime.utcfromtimestamp(duedate_ts).replace(tzinfo=timezone.utc)
+                days_diff = (due_dt - now).days
+                lines.append(f"- {name}: {status}, due in {days_diff} days")
+            else:
+                lines.append(f"- {name}: {status}")
+        assignments_text = "\n".join(lines)
+    
+    prompt = f"""Analyze this student's status in a specific course and provide personalized insights.
+
+STUDENT: {student_name}
+COURSE: {course.get('name', 'Unknown')} ({course.get('id', '')})
+PROGRESS: {progress}% ({completed}/{total} activities completed)
+AVERAGE SCORE: {avg_score if avg_score is not None else 'Not yet graded'}
+
+ASSIGNMENTS:
+{assignments_text if assignments_text else 'No assignments data available'}
+
+Generate a JSON response with:
+1. "insights": An array of 3-4 short, specific bullet points about the student's status in THIS course. Address the student directly with "you/your". Examples:
+   - "You've completed 3/5 lab modules"
+   - "You haven't accessed Topic 3 yet"
+   - "Try completing the next assignment before the deadline"
+2. "study_tip": A single short, actionable study tip specific to this course and the student's current progress.
+
+Return ONLY valid JSON, no markdown, no extra text.
+"""
+    
+    try:
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=app_config.get("AI_MODEL", "gpt-4o-mini"),
+            messages=[
+                {"role": "system", "content": "You are NeoBright, a supportive AI learning coach. Always address the student directly using 'you' and 'your'. Be specific and actionable. Return ONLY valid JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.5,
+            max_tokens=400
+        )
+        
+        import json
+        raw = response.choices[0].message.content.strip()
+        # Strip markdown code fences if present
+        if raw.startswith('```'):
+            raw = raw.split('\n', 1)[1] if '\n' in raw else raw[3:]
+            if raw.endswith('```'):
+                raw = raw[:-3]
+            raw = raw.strip()
+        
+        result = json.loads(raw)
+        return {
+            "insights": result.get("insights", []),
+            "study_tip": result.get("study_tip", "Keep up the good work!")
+        }
+    
+    except Exception as e:
+        print(f"Course insights generation error: {e}")
+        return _fallback_course_insights(course)
+
+
+def _fallback_course_insights(course: dict) -> dict:
+    """Fallback when AI is unavailable."""
+    progress = course.get('progress', 0)
+    completed = course.get('completedActivities', 0)
+    total = course.get('totalActivities', 0)
+    name = course.get('name', 'this course')
+    
+    insights = [f"You've completed {completed}/{total} activities in {name}"]
+    if progress < 50:
+        insights.append("Your progress is below 50% - try to catch up this week")
+        tip = f"Set aside dedicated time to work through the remaining modules in {name}."
+    elif progress < 100:
+        insights.append(f"You're at {progress}% — keep going!")
+        tip = f"You're making good progress. Try to complete the next activity in {name} today."
+    else:
+        insights.append("Great job — you've completed all activities!")
+        tip = "Review the material to solidify your understanding before any exams."
+    
+    return {"insights": insights, "study_tip": tip}
+
+
 @ai_bp.route('/ai/insights', methods=['GET'])
 @firebase_required
 def get_ai_insights():
