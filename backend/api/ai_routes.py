@@ -217,7 +217,10 @@ def get_course_insights(course_id: int):
         
         print(f"Generating fresh course insights for user {firebase_uid}, course {course_id}")
         
-        # Build context (cached 5min)
+        # Build context — bust the in-memory cache when force-refreshing
+        # so we get fresh progress data from Moodle
+        if force_refresh and firebase_uid in _context_cache:
+            del _context_cache[firebase_uid]
         context_dict = _get_cached_ai_context(firebase_uid)
         
         # Find this specific course in context (match by numeric moodle_id)
@@ -294,9 +297,18 @@ def _generate_course_insights(
             if duedate_ts:
                 due_dt = datetime.utcfromtimestamp(duedate_ts).replace(tzinfo=timezone.utc)
                 days_diff = (due_dt - now).days
-                lines.append(f"- {name}: {status}, due in {days_diff} days")
+                if status == 'submitted':
+                    lines.append(f"- {name}: SUBMITTED ✅ (no action needed)")
+                elif days_diff < 0:
+                    lines.append(f"- {name}: NOT SUBMITTED, OVERDUE by {abs(days_diff)} days")
+                elif days_diff == 0:
+                    lines.append(f"- {name}: NOT SUBMITTED, DUE TODAY")
+                elif days_diff == 1:
+                    lines.append(f"- {name}: NOT SUBMITTED, DUE TOMORROW")
+                else:
+                    lines.append(f"- {name}: NOT SUBMITTED, due in {days_diff} days")
             else:
-                lines.append(f"- {name}: {status}")
+                lines.append(f"- {name}: {status}, no due date set")
         assignments_text = "\n".join(lines)
     
     prompt = f"""Analyze this student's status in a specific course and provide personalized insights.
@@ -431,7 +443,11 @@ def get_ai_insights():
         # Generate fresh insights
         print(f"Generating fresh insights for user {firebase_uid} (force={force_refresh})")
         
-        # Build AI context from aggregated data (cached 5min)
+        # Build AI context — bust in-memory cache when force-refreshing
+        # This happens when generating course-specific insights too, so we get fresh progress data from Moodle
+        # regardless of the 5 stale in-min cache.
+        if force_refresh and firebase_uid in _context_cache:
+            del _context_cache[firebase_uid]
         context_dict = _get_cached_ai_context(firebase_uid)
         
         # Convert dict to StudentContext object
