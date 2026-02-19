@@ -896,8 +896,13 @@ GUIDELINES:
 - If asked about due dates or deadlines, use the ASSIGNMENTS context above to give specific dates and names
 - IMPORTANT: Distinguish between SUBMITTED and NOT SUBMITTED assignments. If an assignment is marked as SUBMITTED, do NOT call it overdue or tell the student to submit it — it's already done
 - Only flag assignments as overdue if they are BOTH past due AND not submitted
-- Format responses with bullet points, bold text (**bold**), and clear structure for readability
-- When listing items (progress, assignments, tips), use bullet points (- ) for clarity
+- Format responses using proper markdown for readability:
+  - Use ### for main section headers
+  - Use **bold** for emphasis
+  - Use - for bullet list items (always include the dash and a space)
+  - Use 1. 2. 3. for numbered/ordered lists
+  - Never write list items as bare text without a - or number prefix
+  - Use **Label:** Description format for definition-style items within lists
 - Always speak directly to the student using "you" and "your"
 - Avoid jargon or complex terminology; keep language simple and student-friendly
 
