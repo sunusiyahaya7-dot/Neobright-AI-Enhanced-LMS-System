@@ -34,6 +34,7 @@ class CourseAnalytics:
     completed_activities: int = 0  # Number of completed activities
     total_activities: int = 0  # Total activities in course
     last_access: Optional[str] = None  # ISO 8601 datetime string
+    moodle_id: Optional[int] = None  # Numeric Moodle course ID
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for JSON serialization."""

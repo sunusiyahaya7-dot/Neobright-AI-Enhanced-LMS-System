@@ -18,6 +18,7 @@ import {
   Sparkles,
   Download,
   TrendingUp,
+  RefreshCw,
 } from 'lucide-react';
 
 interface CourseSummary {
@@ -102,10 +103,10 @@ export default function CourseContent() {
   }, [id]);
 
   // Fetch AI course insights (cached — 6hr TTL)
-  const fetchCourseInsights = async () => {
+  const fetchCourseInsights = async (force = false) => {
     try {
       setInsightsLoading(true);
-      const res = await api.get(`/ai/courses/${id}/insights`);
+      const res = await api.get(`/ai/courses/${id}/insights${force ? '?force=true' : ''}`);
       setCourseInsights(res.data);
     } catch {
       // Non-critical — show fallback
@@ -224,17 +225,24 @@ export default function CourseContent() {
 
   // Build dynamic quick queries from actual course data
   const quickQueries = useMemo(() => {
-    const firstSection = sections.find(s => (s.modules || []).length > 0);
-    const sectionName = firstSection?.section_name || 'Topic 1';
-    const latestModule = sections
-      .flatMap(s => s.modules || [])
-      .find(m => m.modname === 'resource' || m.modname === 'page');
-    const moduleName = latestModule?.name || 'the latest module';
+    // Skip generic sections like "General" — find a real topic section
+    const genericNames = ['general', 'announcements', 'news', ''];
+    const topicSection = sections.find(
+      s => (s.modules || []).length > 0 && !genericNames.includes((s.section_name || '').toLowerCase().trim())
+    );
+    const sectionName = topicSection?.section_name || 'Topic 1';
+
+    // Find a specific module (lecture, resource, lab, etc.)
+    const allModulesFlat = sections.flatMap(s => s.modules || []);
+    const contentModule = allModulesFlat.find(
+      m => m.modname === 'resource' || m.modname === 'page' || m.modname === 'assign'
+    );
+    const moduleName = contentModule?.name || 'the latest module';
 
     return [
-      { title: `Summarize ${sectionName}`, subtitle: 'Get a quick recap of key points', prompt: `Summarize the key concepts from "${sectionName}" in ${courseTitle}. Keep it concise and easy to understand.` },
+      { title: 'Summarize this lecture', subtitle: 'Get a quick recap of key points', prompt: `Summarize the key concepts from ${courseTitle}. Cover the main topics and keep it concise and easy to understand.` },
       { title: `Explain ${sectionName} in simpler terms`, subtitle: 'Break down complex concepts', prompt: `Explain the main concepts from "${sectionName}" in ${courseTitle} in simpler terms, as if explaining to a beginner.` },
-      { title: 'Generate quiz from this course', subtitle: 'Test your understanding', prompt: `Create a short quiz (3-5 questions) based on the content of ${courseTitle} to test my understanding. Include multiple choice and short answer questions.` },
+      { title: 'Generate quiz from this module', subtitle: 'Test your understanding', prompt: `Create a short quiz (3-5 questions) based on the content of ${courseTitle} to test my understanding. Include multiple choice and short answer questions.` },
       { title: `Show key points of ${moduleName}`, subtitle: 'Highlight important takeaways', prompt: `What are the key takeaways from "${moduleName}" in ${courseTitle}? List the most important points I should remember.` },
     ];
   }, [sections, courseTitle]);
@@ -394,9 +402,19 @@ export default function CourseContent() {
                     <>
                       {/* AI Auto Insights */}
                       <div className="bg-gradient-to-r from-[#1E5BF0]/10 to-[#2C7CF0]/10 dark:from-[#1E5BF0]/15 dark:to-[#2C7CF0]/15 rounded-2xl p-6 border border-[#1E5BF0]/10 dark:border-[#2C7CF0]/20 mb-6">
-                        <div className="flex items-center gap-2 mb-3">
-                          <Sparkles className="text-[#1E5BF0]" size={18} />
-                          <h3 className="font-semibold text-gray-900 dark:text-white">AI Auto Insights</h3>
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <Sparkles className="text-[#1E5BF0]" size={18} />
+                            <h3 className="font-semibold text-gray-900 dark:text-white">AI Auto Insights</h3>
+                          </div>
+                          <button
+                            onClick={() => fetchCourseInsights(true)}
+                            disabled={insightsLoading}
+                            className="p-1.5 rounded-lg hover:bg-[#1E5BF0]/10 dark:hover:bg-[#1E5BF0]/20 transition-colors disabled:opacity-50"
+                            title="Regenerate AI insights"
+                          >
+                            <RefreshCw size={16} className={`text-[#1E5BF0] ${insightsLoading ? 'animate-spin' : ''}`} />
+                          </button>
                         </div>
                         {insightsLoading ? (
                           <div className="space-y-2">

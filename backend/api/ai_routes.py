@@ -217,7 +217,10 @@ def get_course_insights(course_id: int):
         
         print(f"Generating fresh course insights for user {firebase_uid}, course {course_id}")
         
-        # Build context (cached 5min)
+        # Build context — bust the in-memory cache when force-refreshing
+        # so we get fresh progress data from Moodle
+        if force_refresh and firebase_uid in _context_cache:
+            del _context_cache[firebase_uid]
         context_dict = _get_cached_ai_context(firebase_uid)
         
         # Find this specific course in context (match by numeric moodle_id)
@@ -294,9 +297,18 @@ def _generate_course_insights(
             if duedate_ts:
                 due_dt = datetime.utcfromtimestamp(duedate_ts).replace(tzinfo=timezone.utc)
                 days_diff = (due_dt - now).days
-                lines.append(f"- {name}: {status}, due in {days_diff} days")
+                if status == 'submitted':
+                    lines.append(f"- {name}: SUBMITTED ✅ (no action needed)")
+                elif days_diff < 0:
+                    lines.append(f"- {name}: NOT SUBMITTED, OVERDUE by {abs(days_diff)} days")
+                elif days_diff == 0:
+                    lines.append(f"- {name}: NOT SUBMITTED, DUE TODAY")
+                elif days_diff == 1:
+                    lines.append(f"- {name}: NOT SUBMITTED, DUE TOMORROW")
+                else:
+                    lines.append(f"- {name}: NOT SUBMITTED, due in {days_diff} days")
             else:
-                lines.append(f"- {name}: {status}")
+                lines.append(f"- {name}: {status}, no due date set")
         assignments_text = "\n".join(lines)
     
     prompt = f"""Analyze this student's status in a specific course and provide personalized insights.
@@ -431,7 +443,11 @@ def get_ai_insights():
         # Generate fresh insights
         print(f"Generating fresh insights for user {firebase_uid} (force={force_refresh})")
         
-        # Build AI context from aggregated data (cached 5min)
+        # Build AI context — bust in-memory cache when force-refreshing
+        # This happens when generating course-specific insights too, so we get fresh progress data from Moodle
+        # regardless of the 5 stale in-min cache.
+        if force_refresh and firebase_uid in _context_cache:
+            del _context_cache[firebase_uid]
         context_dict = _get_cached_ai_context(firebase_uid)
         
         # Convert dict to StudentContext object
@@ -896,8 +912,13 @@ GUIDELINES:
 - If asked about due dates or deadlines, use the ASSIGNMENTS context above to give specific dates and names
 - IMPORTANT: Distinguish between SUBMITTED and NOT SUBMITTED assignments. If an assignment is marked as SUBMITTED, do NOT call it overdue or tell the student to submit it — it's already done
 - Only flag assignments as overdue if they are BOTH past due AND not submitted
-- Format responses with bullet points, bold text (**bold**), and clear structure for readability
-- When listing items (progress, assignments, tips), use bullet points (- ) for clarity
+- Format responses using proper markdown for readability:
+  - Use ### for main section headers
+  - Use **bold** for emphasis
+  - Use - for bullet list items (always include the dash and a space)
+  - Use 1. 2. 3. for numbered/ordered lists
+  - Never write list items as bare text without a - or number prefix
+  - Use **Label:** Description format for definition-style items within lists
 - Always speak directly to the student using "you" and "your"
 - Avoid jargon or complex terminology; keep language simple and student-friendly
 

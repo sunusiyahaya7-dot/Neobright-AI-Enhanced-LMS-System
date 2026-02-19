@@ -24,7 +24,8 @@ interface ChatMessageProps {
 
 /**
  * Renders markdown-like content into React elements.
- * Supports: **bold**, bullet points (- ), numbered lists, and line breaks.
+ * Supports: ### headers, **bold**, *italic*, **Label:** sub-headers,
+ * bullet points (- * •), numbered lists (1.), and line breaks.
  */
 function renderContent(text: string): React.ReactNode[] {
   const lines = text.split('\n');
@@ -34,12 +35,19 @@ function renderContent(text: string): React.ReactNode[] {
 
   const flushList = () => {
     if (listItems.length > 0 && listType) {
-      const ListTag = listType === 'ul' ? 'ul' : 'ol';
-      elements.push(
-        <ListTag key={`list-${elements.length}`} className={`${listType === 'ul' ? 'list-disc' : 'list-decimal'} ml-4 space-y-1`}>
-          {listItems}
-        </ListTag>
-      );
+      if (listType === 'ul') {
+        elements.push(
+          <ul key={`list-${elements.length}`} className="list-disc list-outside ml-5 space-y-1">
+            {listItems}
+          </ul>
+        );
+      } else {
+        elements.push(
+          <ol key={`list-${elements.length}`} className="list-decimal list-outside ml-5 space-y-1" style={{ listStyleType: 'decimal' }}>
+            {listItems}
+          </ol>
+        );
+      }
       listItems = [];
       listType = null;
     }
@@ -48,7 +56,57 @@ function renderContent(text: string): React.ReactNode[] {
   lines.forEach((line, i) => {
     const trimmed = line.trim();
 
-    // Bullet point: - or *
+    // Skip empty lines
+    if (trimmed === '') {
+      flushList();
+      elements.push(<div key={`br-${i}`} className="h-2" />);
+      return;
+    }
+
+    // Headers: ### or ## or #
+    const headerMatch = trimmed.match(/^(#{1,3})\s+(.+)$/);
+    if (headerMatch) {
+      flushList();
+      const level = headerMatch[1].length;
+      const headerText = headerMatch[2];
+      if (level === 1) {
+        elements.push(<h3 key={`h-${i}`} className="text-base font-bold mt-3 mb-1">{formatInline(headerText)}</h3>);
+      } else if (level === 2) {
+        elements.push(<h4 key={`h-${i}`} className="text-sm font-bold mt-2.5 mb-1">{formatInline(headerText)}</h4>);
+      } else {
+        elements.push(<h5 key={`h-${i}`} className="text-sm font-semibold mt-2 mb-0.5">{formatInline(headerText)}</h5>);
+      }
+      return;
+    }
+
+    // **Bold Label:** with description on same line → labeled list item
+    // e.g. "**Data Parallelism:** Focuses on distributing..."
+    const labeledMatch = trimmed.match(/^\*\*(.+?):\*\*\s*(.+)$/);
+    if (labeledMatch) {
+      if (listType !== 'ul') {
+        flushList();
+        listType = 'ul';
+      }
+      listItems.push(
+        <li key={`li-${i}`} className="text-sm leading-relaxed">
+          <strong className="font-semibold">{labeledMatch[1]}:</strong> {formatInline(labeledMatch[2])}
+        </li>
+      );
+      return;
+    }
+
+    // **Bold Label:** alone on a line (sub-header for a group)
+    // e.g. "**Introduction to Parallel Computing:**"
+    const subHeaderMatch = trimmed.match(/^\*\*(.+?):\*\*\s*$/);
+    if (subHeaderMatch) {
+      flushList();
+      elements.push(
+        <p key={`sh-${i}`} className="text-sm font-semibold mt-2 mb-0.5">{subHeaderMatch[1]}:</p>
+      );
+      return;
+    }
+
+    // Bullet point: - or • (but NOT ** which is bold)
     if (/^[-•]\s+/.test(trimmed)) {
       if (listType !== 'ul') {
         flushList();
@@ -58,23 +116,29 @@ function renderContent(text: string): React.ReactNode[] {
       return;
     }
 
+    // Bullet point: single * followed by space (not **bold**)
+    if (/^\*\s+/.test(trimmed) && !trimmed.startsWith('**')) {
+      if (listType !== 'ul') {
+        flushList();
+        listType = 'ul';
+      }
+      listItems.push(<li key={`li-${i}`} className="text-sm leading-relaxed">{formatInline(trimmed.replace(/^\*\s+/, ''))}</li>);
+      return;
+    }
+
     // Numbered list: 1. or 1)
-    if (/^\d+[.)\s]/.test(trimmed)) {
+    if (/^\d+[.)]\s/.test(trimmed)) {
       if (listType !== 'ol') {
         flushList();
         listType = 'ol';
       }
-      listItems.push(<li key={`li-${i}`} className="text-sm leading-relaxed">{formatInline(trimmed.replace(/^\d+[.)\s]+/, ''))}</li>);
+      listItems.push(<li key={`li-${i}`} className="text-sm leading-relaxed">{formatInline(trimmed.replace(/^\d+[.)]\s+/, ''))}</li>);
       return;
     }
 
     // Regular text line
     flushList();
-    if (trimmed === '') {
-      elements.push(<div key={`br-${i}`} className="h-2" />);
-    } else {
-      elements.push(<p key={`p-${i}`} className="text-sm leading-relaxed">{formatInline(trimmed)}</p>);
-    }
+    elements.push(<p key={`p-${i}`} className="text-sm leading-relaxed">{formatInline(trimmed)}</p>);
   });
 
   flushList();
@@ -256,13 +320,20 @@ export default function ChatMessage({ role, content, timestamp, file, actions, i
 }
 
 function formatTimeAgo(dateString: string): string {
-  const date = new Date(dateString);
+  // Backend sends UTC timestamps without 'Z' suffix — normalize
+  let normalized = dateString;
+  if (normalized && !normalized.endsWith('Z') && !normalized.includes('+')) {
+    normalized += 'Z';
+  }
+  const date = new Date(normalized);
+  if (isNaN(date.getTime())) return '';
+
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffMins = Math.floor(diffMs / 60000);
   const diffHours = Math.floor(diffMins / 60);
 
-  if (diffMins < 1) return 'now';
+  if (diffMins < 1) return 'just now';
   if (diffMins < 60) return `${diffMins}m ago`;
   if (diffHours < 24) return `${diffHours}h ago`;
   return date.toLocaleDateString();
