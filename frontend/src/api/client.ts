@@ -39,7 +39,7 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       const backendError = error.response?.data?.error;
       const backendDetails = error.response?.data?.details;
-      // Helpful debug output: tells us whether the token was missing vs actually invalid.
+      // Helpful debug output: tells me whether the token was missing vs actually invalid.
       console.error(
         "Unauthorized:",
         backendError || "Request unauthorized",
