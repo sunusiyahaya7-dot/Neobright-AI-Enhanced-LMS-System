@@ -567,3 +567,333 @@ class MoodleService:
             import traceback
             traceback.print_exc()
             raise
+
+    # ── Quiz Methods ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def get_quizzes_by_course(course_id: int):
+        """
+        Fetch all quizzes in a course.
+
+        Uses mod_quiz_get_quizzes_by_courses.
+
+        Args:
+            course_id: Moodle course ID
+
+        Returns:
+            Dict with 'quizzes' list containing quiz objects with fields like:
+            id, course, coursemodule, name, intro, timeopen, timeclose,
+            timelimit, grade, attempts, grademethod, etc.
+        """
+        try:
+            print(f"Fetching quizzes for course {course_id}...")
+            url = MoodleService._build_url("mod_quiz_get_quizzes_by_courses")
+            params = {"courseids[0]": course_id}
+
+            response = MoodleService._request("GET", url, params=params, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+            print(f"Quizzes response summary: {MoodleService._safe_summary(data)}")
+
+            if isinstance(data, dict) and "exception" in data:
+                raise RuntimeError(
+                    f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                )
+
+            return data
+
+        except Exception as e:
+            print(f"Error fetching quizzes for course {course_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"quizzes": [], "warnings": []}
+
+    @staticmethod
+    def get_quiz_user_attempts(quiz_id: int, user_id: int, status: str = "all"):
+        """
+        Fetch a user's attempts for a quiz.
+
+        Uses mod_quiz_get_user_attempts.
+
+        Args:
+            quiz_id: Moodle quiz ID
+            user_id: Moodle user ID
+            status: Filter by status – 'all', 'finished', or 'unfinished'
+
+        Returns:
+            Dict with 'attempts' list containing attempt objects with fields like:
+            id, quiz, userid, attempt, state, timestart, timefinish,
+            sumgrades, etc.
+        """
+        try:
+            print(f"Fetching attempts for quiz {quiz_id}, user {user_id}...")
+            url = MoodleService._build_url("mod_quiz_get_user_attempts")
+            params = {
+                "quizid": quiz_id,
+                "userid": user_id,
+                "status": status,
+            }
+
+            response = MoodleService._request("GET", url, params=params, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+            print(f"Attempts response summary: {MoodleService._safe_summary(data)}")
+
+            if isinstance(data, dict) and "exception" in data:
+                raise RuntimeError(
+                    f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                )
+
+            return data
+
+        except Exception as e:
+            print(f"Error fetching attempts for quiz {quiz_id}, user {user_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"attempts": [], "warnings": []}
+
+    @staticmethod
+    def get_quiz_attempt_review(attempt_id: int, page: int = -1):
+        """
+        Fetch the review (graded results) of a finished quiz attempt.
+
+        Uses mod_quiz_get_attempt_review.
+
+        Args:
+            attempt_id: Moodle attempt ID
+            page: Page number (-1 = all pages in one response)
+
+        Returns:
+            Dict with 'questions' list containing graded question data,
+            plus 'attempt' metadata and 'grade' info.
+        """
+        try:
+            print(f"Fetching attempt review for attempt {attempt_id}...")
+            url = MoodleService._build_url("mod_quiz_get_attempt_review")
+            params = {
+                "attemptid": attempt_id,
+                "page": page,
+            }
+
+            response = MoodleService._request("GET", url, params=params, timeout=15)
+            response.raise_for_status()
+
+            data = response.json()
+            print(f"Attempt review summary: {MoodleService._safe_summary(data)}")
+
+            if isinstance(data, dict) and "exception" in data:
+                raise RuntimeError(
+                    f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                )
+
+            return data
+
+        except Exception as e:
+            print(f"Error fetching review for attempt {attempt_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"questions": [], "attempt": {}, "warnings": []}
+
+    @staticmethod
+    def get_quiz_access_info(quiz_id: int):
+        """
+        Fetch access/capability information for a quiz.
+
+        Uses mod_quiz_get_quiz_access_information.
+
+        Args:
+            quiz_id: Moodle quiz ID
+
+        Returns:
+            Dict with access info: canattempt, canmanage, canpreview,
+            canreviewmyattempts, accessrules, etc.
+        """
+        try:
+            print(f"Fetching access info for quiz {quiz_id}...")
+            url = MoodleService._build_url("mod_quiz_get_quiz_access_information")
+            params = {"quizid": quiz_id}
+
+            response = MoodleService._request("GET", url, params=params, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+
+            if isinstance(data, dict) and "exception" in data:
+                raise RuntimeError(
+                    f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                )
+
+            return data
+
+        except Exception as e:
+            print(f"Error fetching access info for quiz {quiz_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {}
+
+    @staticmethod
+    def start_quiz_attempt(quiz_id: int):
+        """
+        Start a new quiz attempt.
+
+        Uses mod_quiz_start_attempt.
+
+        Args:
+            quiz_id: Moodle quiz ID
+
+        Returns:
+            Dict with 'attempt' object (id, quiz, state, timestart, etc.)
+        """
+        try:
+            print(f"Starting quiz attempt for quiz {quiz_id}...")
+            url = MoodleService._build_url("mod_quiz_start_attempt")
+            params = {"quizid": quiz_id}
+
+            response = MoodleService._request("POST", url, data=params, timeout=15)
+            response.raise_for_status()
+
+            data = response.json()
+            print(f"Start attempt response summary: {MoodleService._safe_summary(data)}")
+
+            if isinstance(data, dict) and "exception" in data:
+                raise RuntimeError(
+                    f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                )
+
+            return data
+
+        except Exception as e:
+            print(f"Error starting attempt for quiz {quiz_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+
+    @staticmethod
+    def get_attempt_data(attempt_id: int, page: int = 0):
+        """
+        Fetch question data for an in-progress attempt (page by page).
+
+        Uses mod_quiz_get_attempt_data.
+
+        Args:
+            attempt_id: Moodle attempt ID
+            page: Page number (0-based)
+
+        Returns:
+            Dict with 'questions' list (HTML-rendered question forms),
+            'attempt' metadata, and 'nextpage' (-1 if last page).
+        """
+        try:
+            print(f"Fetching attempt data for attempt {attempt_id}, page {page}...")
+            url = MoodleService._build_url("mod_quiz_get_attempt_data")
+            params = {
+                "attemptid": attempt_id,
+                "page": page,
+            }
+
+            response = MoodleService._request("GET", url, params=params, timeout=15)
+            response.raise_for_status()
+
+            data = response.json()
+            print(f"Attempt data summary: {MoodleService._safe_summary(data)}")
+
+            if isinstance(data, dict) and "exception" in data:
+                raise RuntimeError(
+                    f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                )
+
+            return data
+
+        except Exception as e:
+            print(f"Error fetching attempt data for attempt {attempt_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"questions": [], "attempt": {}, "nextpage": -1, "warnings": []}
+
+    @staticmethod
+    def save_attempt_data(attempt_id: int, data: list):
+        """
+        Save (but do not submit) answers for an in-progress quiz attempt.
+
+        Uses mod_quiz_save_attempt.
+
+        Args:
+            attempt_id: Moodle attempt ID
+            data: List of dicts with 'name' and 'value' for each answer field.
+                  e.g. [{"name": "q1:1_answer", "value": "3"}]
+
+        Returns:
+            Dict – typically {"status": true} on success.
+        """
+        try:
+            print(f"Saving attempt data for attempt {attempt_id}...")
+            url = MoodleService._build_url("mod_quiz_save_attempt")
+            params = {"attemptid": attempt_id}
+
+            # Encode the data array into Moodle's expected format
+            for idx, item in enumerate(data):
+                params[f"data[{idx}][name]"] = item["name"]
+                params[f"data[{idx}][value]"] = item["value"]
+
+            response = MoodleService._request("POST", url, data=params, timeout=15)
+            response.raise_for_status()
+
+            result = response.json()
+            print(f"Save attempt response: {result}")
+
+            if isinstance(result, dict) and "exception" in result:
+                raise RuntimeError(
+                    f"Moodle error: {result.get('exception')} - {result.get('message')}"
+                )
+
+            return result
+
+        except Exception as e:
+            print(f"Error saving attempt data for attempt {attempt_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+
+    @staticmethod
+    def submit_quiz_attempt(attempt_id: int, time_up: bool = False):
+        """
+        Submit (finish) a quiz attempt for grading.
+
+        Uses mod_quiz_process_attempt.
+
+        Args:
+            attempt_id: Moodle attempt ID
+            time_up: Whether the attempt is being auto-submitted due to time expiry
+
+        Returns:
+            Dict with 'state' (e.g. 'finished') and 'warnings'.
+        """
+        try:
+            print(f"Submitting quiz attempt {attempt_id}...")
+            url = MoodleService._build_url("mod_quiz_process_attempt")
+            params = {
+                "attemptid": attempt_id,
+                "finishattempt": 1,
+                "timeup": 1 if time_up else 0,
+            }
+
+            response = MoodleService._request("POST", url, data=params, timeout=15)
+            response.raise_for_status()
+
+            result = response.json()
+            print(f"Submit attempt response: {result}")
+
+            if isinstance(result, dict) and "exception" in result:
+                raise RuntimeError(
+                    f"Moodle error: {result.get('exception')} - {result.get('message')}"
+                )
+
+            return result
+
+        except Exception as e:
+            print(f"Error submitting attempt {attempt_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
