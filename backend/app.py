@@ -11,7 +11,6 @@ from routes.materials_routes import materials_bp
 from routes.progress_routes import progress_bp
 from routes.analytics_routes import analytics_bp
 from routes.grades_routes import grades_bp
-from routes.quizzes_routes import quizzes_bp
 import firebase_admin
 from firebase_admin import credentials
 import os
@@ -49,7 +48,6 @@ def create_app():
     app.register_blueprint(progress_bp)
     app.register_blueprint(analytics_bp)
     app.register_blueprint(grades_bp)
-    app.register_blueprint(quizzes_bp)
 
     # Simple health check route
     @app.route("/health", methods=["GET"])
