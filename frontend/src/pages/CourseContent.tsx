@@ -6,7 +6,10 @@ import AssignmentDetailsModal from '../components/AssignmentDetailsModal';
 import { MarkAsDoneButton } from '../components/MarkAsDoneButton';
 import { getCourseContents, getCourseAssignments, getQuizzes } from '../services/moodleService';
 import { progressService, CourseProgress } from '../services/progressService';
+import api from '../api/client';
 import GradesContent from '../components/GradesContent';
+import AIChatPanel from '../components/AIChatPanel';
+
 import {
   ChevronDown,
   ChevronRight,
@@ -15,6 +18,7 @@ import {
   Sparkles,
   Download,
   TrendingUp,
+  RefreshCw,
 } from 'lucide-react';
 
 interface CourseSummary {
@@ -108,12 +112,32 @@ export default function CourseContent() {
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
   const [selectedModule, setSelectedModule] = useState<{ module: CourseModule; sectionName?: string } | null>(null);
   const [selectedAssignment, setSelectedAssignment] = useState<CourseAssignment | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatPrompt, setChatPrompt] = useState<string | undefined>(undefined);
+  const [courseInsights, setCourseInsights] = useState<{ insights: string[]; study_tip: string } | null>(null);
+  const [insightsLoading, setInsightsLoading] = useState(true);
+  
 
   useEffect(() => {
     if (id) {
       fetchCourseContent();
+      fetchCourseInsights();
     }
   }, [id]);
+
+  // Fetch AI course insights (cached — 6hr TTL)
+  const fetchCourseInsights = async (force = false) => {
+    try {
+      setInsightsLoading(true);
+      const res = await api.get(`/ai/courses/${id}/insights${force ? '?force=true' : ''}`);
+      setCourseInsights(res.data);
+    } catch {
+      // Non-critical — show fallback
+      setCourseInsights(null);
+    } finally {
+      setInsightsLoading(false);
+    }
+  };
 
   const fetchCourseContent = async () => {
     try {
@@ -221,6 +245,36 @@ export default function CourseContent() {
   const toggleSection = (sectionId: string) => {
     setOpenSections((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }));
   };
+
+  // Open chat with a specific prompt
+  const askAI = (prompt: string) => {
+    setChatPrompt(prompt);
+    setChatOpen(true);
+  };
+
+  // Build dynamic quick queries from actual course data
+  const quickQueries = useMemo(() => {
+    // Skip generic sections like "General" — find a real topic section
+    const genericNames = ['general', 'announcements', 'news', ''];
+    const topicSection = sections.find(
+      s => (s.modules || []).length > 0 && !genericNames.includes((s.section_name || '').toLowerCase().trim())
+    );
+    const sectionName = topicSection?.section_name || 'Topic 1';
+
+    // Find a specific module (lecture, resource, lab, etc.)
+    const allModulesFlat = sections.flatMap(s => s.modules || []);
+    const contentModule = allModulesFlat.find(
+      m => m.modname === 'resource' || m.modname === 'page' || m.modname === 'assign'
+    );
+    const moduleName = contentModule?.name || 'the latest module';
+
+    return [
+      { title: 'Summarize this lecture', subtitle: 'Get a quick recap of key points', prompt: `Summarize the key concepts from ${courseTitle}. Cover the main topics and keep it concise and easy to understand.` },
+      { title: `Explain ${sectionName} in simpler terms`, subtitle: 'Break down complex concepts', prompt: `Explain the main concepts from "${sectionName}" in ${courseTitle} in simpler terms, as if explaining to a beginner.` },
+      { title: 'Generate quiz from this module', subtitle: 'Test your understanding', prompt: `Create a short quiz (3-5 questions) based on the content of ${courseTitle} to test my understanding. Include multiple choice and short answer questions.` },
+      { title: `Show key points of ${moduleName}`, subtitle: 'Highlight important takeaways', prompt: `What are the key takeaways from "${moduleName}" in ${courseTitle}? List the most important points I should remember.` },
+    ];
+  }, [sections, courseTitle]);
 
   return (
     <Layout>
@@ -471,14 +525,38 @@ export default function CourseContent() {
                     <>
                       {/* AI Auto Insights */}
                       <div className="bg-gradient-to-r from-[#1E5BF0]/10 to-[#2C7CF0]/10 dark:from-[#1E5BF0]/15 dark:to-[#2C7CF0]/15 rounded-2xl p-6 border border-[#1E5BF0]/10 dark:border-[#2C7CF0]/20 mb-6">
-                        <div className="flex items-center gap-2 mb-3">
-                          <Sparkles className="text-[#1E5BF0]" size={18} />
-                          <h3 className="font-semibold text-gray-900 dark:text-white">AI Auto Insights</h3>
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <Sparkles className="text-[#1E5BF0]" size={18} />
+                            <h3 className="font-semibold text-gray-900 dark:text-white">AI Auto Insights</h3>
+                          </div>
+                          <button
+                            onClick={() => fetchCourseInsights(true)}
+                            disabled={insightsLoading}
+                            className="p-1.5 rounded-lg hover:bg-[#1E5BF0]/10 dark:hover:bg-[#1E5BF0]/20 transition-colors disabled:opacity-50"
+                            title="Regenerate AI insights"
+                          >
+                            <RefreshCw size={16} className={`text-[#1E5BF0] ${insightsLoading ? 'animate-spin' : ''}`} />
+                          </button>
                         </div>
-                        <ul className="text-sm text-gray-700 dark:text-gray-300 space-y-1">
-                          <li>• Modules and files are loaded from Moodle</li>
-                          <li>• Next: connect processed materials from Firestore</li>
-                        </ul>
+                        {insightsLoading ? (
+                          <div className="space-y-2">
+                            <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded animate-pulse w-3/4" />
+                            <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded animate-pulse w-2/3" />
+                            <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded animate-pulse w-1/2" />
+                          </div>
+                        ) : courseInsights?.insights?.length ? (
+                          <ul className="text-sm text-gray-700 dark:text-gray-300 space-y-1">
+                            {courseInsights.insights.map((insight, idx) => (
+                              <li key={idx}>• {insight}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <ul className="text-sm text-gray-700 dark:text-gray-300 space-y-1">
+                            <li>• Modules and files are loaded from Moodle</li>
+                            <li>• AI insights will appear here once generated</li>
+                          </ul>
+                        )}
                       </div>
 
                       {/* Sections / Modules */}
@@ -607,6 +685,22 @@ export default function CourseContent() {
                                     })}
                                   </div>
                                 ) : null}
+
+                                {/* Ask AI about this topic button */}
+                                {isOpen && (section.modules || []).length > 0 && (
+                                  <div className="px-5 pb-5">
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        askAI(`Explain the key concepts from "${section.section_name || 'this topic'}" in ${courseTitle}. Break it down clearly and highlight what I should focus on.`);
+                                      }}
+                                      className="w-full py-3 rounded-xl bg-gradient-to-r from-[#1E5BF0] to-[#2C7CF0] text-white font-medium text-sm hover:from-[#184AD0] hover:to-[#2468D0] transition-all flex items-center justify-center gap-2"
+                                    >
+                                      <Sparkles size={16} />
+                                      Ask NeoBright AI about this topic
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             );
                           })
@@ -632,14 +726,10 @@ export default function CourseContent() {
 
                   <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-3">QUICK QUERIES</p>
                   <div className="space-y-3">
-                    {[
-                      { title: 'Summarize this lecture', subtitle: 'Get a quick recap of key points' },
-                      { title: 'Explain Topic 1 in simpler terms', subtitle: 'Break down complex concepts' },
-                      { title: 'Generate quiz from this module', subtitle: 'Test your understanding' },
-                      { title: 'Show key points of Lab', subtitle: 'Highlight important takeaways' },
-                    ].map((q) => (
+                    {quickQueries.map((q) => (
                       <button
                         key={q.title}
+                        onClick={() => askAI(q.prompt)}
                         className="w-full text-left p-4 rounded-xl bg-gray-50 dark:bg-[#111418] hover:bg-gray-100 dark:hover:bg-[#151A20] border border-gray-200 dark:border-[#2A2D32] transition-colors"
                       >
                         <p className="font-semibold text-sm text-gray-900 dark:text-white">{q.title}</p>
@@ -649,9 +739,12 @@ export default function CourseContent() {
                   </div>
 
                   <div className="mt-6 p-4 rounded-2xl bg-gradient-to-r from-[#1E5BF0] to-[#2C7CF0] text-white">
-                    <p className="text-xs font-semibold mb-1">Study Tip</p>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-base">💡</span>
+                      <p className="text-xs font-semibold">Study Tip</p>
+                    </div>
                     <p className="text-sm text-white/90">
-                      Once Firestore processed materials are connected, this panel can suggest what to study next.
+                      {courseInsights?.study_tip || 'Loading your personalized study tip...'}
                     </p>
                   </div>
                 </div>
@@ -660,6 +753,44 @@ export default function CourseContent() {
           )}
         </div>
       </div>
+
+      {/* AI Chat Floating Button */}
+            {!chatOpen && (
+              <div className="fixed bottom-8 right-8 flex flex-col items-end gap-3 z-30 group">
+                <div className="bg-gray-900 dark:bg-gray-800 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+                  Ask NeoBright AI
+                </div>
+                <button
+                  onClick={() => setChatOpen(true)}
+                  className="w-16 h-16 bg-gradient-to-br from-blue-500 via-blue-500 to-blue-600 hover:from-blue-600 hover:via-blue-600 hover:to-blue-700 text-white rounded-full flex items-center justify-center shadow-xl transition-all hover:scale-110 active:scale-95 z-30"
+                  style={{ animation: 'subtle-float 4s ease-in-out 2s infinite' }}
+                >
+                  <Sparkles className="w-8 h-8" />
+                  <div className="absolute inset-0 rounded-full bg-blue-400 opacity-20 group-hover:opacity-40 transition-opacity" style={{ animation: 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite' }} />
+                </button>
+              </div>
+            )}
+      
+            <style>{`
+              @keyframes subtle-float {
+                0%, 100% { transform: translateY(0px) rotate(0deg); }
+                25% { transform: translateY(-2px) rotate(-1deg); }
+                50% { transform: translateY(0px) rotate(0deg); }
+                75% { transform: translateY(-2px) rotate(1deg); }
+              }
+            `}</style>
+      
+            {/* Chat Panel */}
+            <AIChatPanel
+              isOpen={chatOpen}
+              onClose={() => {
+                setChatOpen(false);
+                setChatPrompt(undefined);
+              }}
+              courseId={Number(id)}
+              initialMessage={chatPrompt}
+            />
+            
 
       {/* Module Details Modal */}
       {selectedModule && (
@@ -688,3 +819,5 @@ export default function CourseContent() {
     </Layout>
   );
 }
+
+

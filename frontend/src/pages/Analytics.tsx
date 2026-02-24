@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from "react";
+import AIChatPanel from '../components/AIChatPanel';
+import api from '../api/client';
 import { useAuth } from "../auth/AuthContext";
 import {
   analyticsService,
@@ -16,6 +18,7 @@ import {
   Zap,
   Sparkles,
   ArrowLeft,
+  RefreshCw,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { Link } from "react-router-dom";
@@ -38,6 +41,7 @@ import {
   RadialBarChart,
   RadialBar,
 } from "recharts";
+
 
 interface Course {
   id: number;
@@ -66,10 +70,27 @@ export default function Analytics() {
   const [progressData, setProgressData] = useState<any[]>([]);
   const [weeklyProgressData, setWeeklyProgressData] = useState<any[]>([]);
   const [averageVelocity, setAverageVelocity] = useState<number>(0);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatPrompt, setChatPrompt] = useState<string | undefined>(undefined);
+  const [aiInsight, setAiInsight] = useState<{ summary: string; actions: { title: string; description: string; priority: string }[]; strengths: string[] } | null>(null);
+  const [insightLoading, setInsightLoading] = useState(false);
 
   useEffect(() => {
     loadAnalytics();
+    fetchAiInsight();
   }, []);
+
+  const fetchAiInsight = async (force = false) => {
+    try {
+      setInsightLoading(true);
+      const res = await api.get(`/ai/insights${force ? '?force=true' : ''}`);
+      setAiInsight(res.data);
+    } catch {
+      // Non-critical — keep fallback
+    } finally {
+      setInsightLoading(false);
+    }
+  };
 
   const loadAnalytics = async () => {
     try {
@@ -153,39 +174,13 @@ export default function Analytics() {
     analytics?.courses.filter((c) => c.engagement.inactiveDays <= 2).length ||
     0;
 
-  const getRecommendations = () => {
-    const recs: string[] = [];
-    const atRiskCourses =
-      analytics?.courses.filter(
-        (c) => c.riskLevel === "high" || c.riskLevel === "medium",
-      ) || [];
-
-    if (atRiskCourses.length > 0) {
-      const worstCourse = courses.find(
-        (c) => c.id === atRiskCourses[0]?.courseId,
-      );
-      if (worstCourse) {
-        recs.push(
-          `Focus on ${worstCourse.shortname} - it's your lowest performing course`,
-        );
-      }
+  const getRecommendations = (): string[] => {
+    // Use real AI actions if available
+    if (aiInsight?.actions?.length) {
+      return aiInsight.actions.map(a => a.title || a.description || '');
     }
-
-    if (avgProgress < 60) {
-      recs.push("Schedule 20-minute daily recap sessions for better retention");
-    }
-
-    if (assignmentStats.overdue > 0) {
-      recs.push(
-        `Complete ${assignmentStats.overdue} overdue assignment${assignmentStats.overdue > 1 ? "s" : ""} as soon as possible`,
-      );
-    } else if (assignmentStats.pending > 0) {
-      recs.push("Stay ahead by completing upcoming assignments early");
-    }
-
-    return recs.length > 0
-      ? recs
-      : ["Great work! Keep maintaining your current study pace"];
+    // Fallback while loading or on error
+    return ["Loading AI recommendations..."];
   };
 
   if (loading) {
@@ -555,17 +550,30 @@ export default function Analytics() {
                   <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center flex-shrink-0">
                     <Sparkles size={24} />
                   </div>
-                  <div>
-                    <h3 className="text-xl font-bold mb-2">
-                      AI Learning Insight
-                    </h3>
-                    <p className="text-white/90 text-sm leading-relaxed">
-                      {avgProgress >= 75
-                        ? "Excellent progress! You're maintaining strong performance across all courses. Consider challenging yourself with advanced topics."
-                        : avgProgress >= 50
-                          ? "Good momentum! Focus on completing pending assignments to maintain your upward trend. Your consistency is paying off."
-                          : "Your learning patterns show room for improvement. Try breaking study sessions into smaller chunks and reviewing material regularly."}
-                    </p>
+                  <div className="flex-1">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xl font-bold mb-2">
+                        AI Learning Insight
+                      </h3>
+                      <button
+                        onClick={() => fetchAiInsight(true)}
+                        disabled={insightLoading}
+                        className="p-1.5 rounded-lg hover:bg-white/20 transition-colors disabled:opacity-50"
+                        title="Regenerate insight"
+                      >
+                        <RefreshCw size={16} className={insightLoading ? 'animate-spin' : ''} />
+                      </button>
+                    </div>
+                    {insightLoading ? (
+                      <div className="space-y-2">
+                        <div className="h-4 bg-white/20 rounded animate-pulse w-3/4" />
+                        <div className="h-4 bg-white/20 rounded animate-pulse w-2/3" />
+                      </div>
+                    ) : (
+                      <p className="text-white/90 text-sm leading-relaxed">
+                        {aiInsight?.summary || 'Generating your personalized learning insight...'}
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -588,6 +596,43 @@ export default function Analytics() {
           </div>
         </div>
       </div>
+
+      {/* AI Chat Floating Button */}
+            {!chatOpen && (
+              <div className="fixed bottom-8 right-8 flex flex-col items-end gap-3 z-30 group">
+                <div className="bg-gray-900 dark:bg-gray-800 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+                  Ask NeoBright AI
+                </div>
+                <button
+                  onClick={() => setChatOpen(true)}
+                  className="w-16 h-16 bg-gradient-to-br from-blue-500 via-blue-500 to-blue-600 hover:from-blue-600 hover:via-blue-600 hover:to-blue-700 text-white rounded-full flex items-center justify-center shadow-xl transition-all hover:scale-110 active:scale-95 z-30"
+                  style={{ animation: 'subtle-float 4s ease-in-out 2s infinite' }}
+                >
+                  <Sparkles className="w-8 h-8" />
+                  <div className="absolute inset-0 rounded-full bg-blue-400 opacity-20 group-hover:opacity-40 transition-opacity" style={{ animation: 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite' }} />
+                </button>
+              </div>
+            )}
+      
+            <style>{`
+              @keyframes subtle-float {
+                0%, 100% { transform: translateY(0px) rotate(0deg); }
+                25% { transform: translateY(-2px) rotate(-1deg); }
+                50% { transform: translateY(0px) rotate(0deg); }
+                75% { transform: translateY(-2px) rotate(1deg); }
+              }
+            `}</style>
+      
+            {/* Chat Panel */}
+            <AIChatPanel
+              isOpen={chatOpen}
+              onClose={() => {
+                setChatOpen(false);
+                setChatPrompt(undefined);
+              }}
+              courseId={0}
+              initialMessage={chatPrompt}
+            />
     </Layout>
   );
 }

@@ -15,7 +15,20 @@ def firebase_required(f):
         
         id_token = auth_header.split(" ", 1)[1].strip()
         try:
-            decoded_token = firebase_auth.verify_id_token(id_token)
+            # check_revoked=False for faster validation; clock skew handled by retry
+            decoded_token = firebase_auth.verify_id_token(id_token, check_revoked=False)
+        except firebase_auth.InvalidIdTokenError as e:
+            error_msg = str(e)
+            # Handle clock skew: "Token used too early" - token is valid, just clock drift
+            if "used too early" in error_msg.lower():
+                import time
+                time.sleep(2)  # Wait for clock to catch up
+                try:
+                    decoded_token = firebase_auth.verify_id_token(id_token, check_revoked=False)
+                except Exception as retry_e:
+                    return jsonify({"error": "Invalid or expired token", "details": str(retry_e)}), 401
+            else:
+                return jsonify({"error": "Invalid or expired token", "details": error_msg}), 401
         except Exception as e:
             return jsonify({"error": "Invalid or expired token", "details": str(e)}), 401
         
