@@ -4,6 +4,8 @@ from flask import Blueprint, jsonify, request, g
 from auth.firebase_auth import firebase_required
 from services.moodle_service import MoodleService
 from services.firestore_service import FirestoreService
+from services.progress_service import ProgressService
+from services.grade_cache_service import GradeCacheService
 
 quiz_bp = Blueprint("quizzes", __name__, url_prefix="/api")
 
@@ -365,6 +367,15 @@ def submit_attempt(quiz_id: int, attempt_id: int):
             })
         except Exception as log_err:
             print(f"Firestore quiz logging failed (submit): {log_err}")
+
+        # Best-effort: bust the 5-min AI context cache so AI sees updated quiz scores
+        try:
+            from api.ai_routes import _context_cache
+            if g.firebase_uid in _context_cache:
+                del _context_cache[g.firebase_uid]
+                print(f"Busted AI context cache for {g.firebase_uid}")
+        except Exception as cache_err:
+            print(f"Failed to bust AI context cache: {cache_err}")
 
         return jsonify({"success": True, "result": result}), 200
 

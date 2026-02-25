@@ -161,9 +161,28 @@ export default function CourseContent() {
     }
   };
 
-  const handleQuizFinished = () => {
+  const handleQuizFinished = async () => {
+    const quiz = activeQuizAttempt?.quiz;
     setActiveQuizAttempt(null);
     fetchQuizzes(); // Refresh quiz list to show updated attempts
+
+    // Mark quiz activity as complete & refresh progress (best-effort)
+    if (quiz?.coursemodule && id) {
+      try {
+        await progressService.markActivityComplete(Number(id), quiz.coursemodule);
+      } catch (err) {
+        console.error('Failed to mark quiz complete:', err);
+      }
+      // Refresh progress bar + completion checkmarks
+      try {
+        await Promise.all([
+          fetchCourseProgress(),
+          fetchCompletions(),
+        ]);
+      } catch (err) {
+        console.error('Failed to refresh progress after quiz:', err);
+      }
+    }
   };
 
   // Fetch AI course insights (cached — 6hr TTL)

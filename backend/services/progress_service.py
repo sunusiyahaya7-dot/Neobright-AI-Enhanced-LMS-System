@@ -304,6 +304,18 @@ class ProgressService:
         except Exception as e:
             print(f"Error retrieving cached progress: {e}")
             return None
+
+    @staticmethod
+    def invalidate_course_progress_cache(firebase_uid: str, course_id: int) -> None:
+        """Delete cached progress for a course so the next fetch re-computes it."""
+        try:
+            fs = FirestoreService()
+            fs.db.collection("progress").document(firebase_uid).collection(
+                "courses"
+            ).document(str(course_id)).delete()
+            print(f"Invalidated progress cache for user {firebase_uid}, course {course_id}")
+        except Exception as e:
+            print(f"Error invalidating progress cache: {e}")
     
     @staticmethod
     def get_all_courses_progress(firebase_uid: str) -> List[Dict]:
