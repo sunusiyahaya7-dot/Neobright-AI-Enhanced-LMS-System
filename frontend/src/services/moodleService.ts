@@ -9,6 +9,21 @@ export const getCourses = async () => {
   // Also: handle common first-run cases cleanly (token refresh + auto-link).
   try {
     const res = await api.get("/moodle/my-courses");
+
+    // If the backend thinks we're linked but returns zero courses, attempt a one-time relink
+    // (common when the stored moodle_user_id points at a duplicate/legacy account).
+    const courses = res?.data?.courses;
+    if (res?.data?.success === true && Array.isArray(courses) && courses.length === 0) {
+      try {
+        await api.post("/moodle/link", {});
+        const retry = await api.get("/moodle/my-courses");
+        return retry.data;
+      } catch {
+        // If relinking fails, fall back to the original empty response.
+        return res.data;
+      }
+    }
+
     return res.data;
   } catch (err: any) {
     const status = err?.response?.status;
@@ -27,9 +42,15 @@ export const getCourses = async () => {
       typeof apiError === "string" &&
       apiError.toLowerCase().includes("not linked")
     ) {
-      await api.post("/moodle/link", {});
-      const res = await api.get("/moodle/my-courses");
-      return res.data;
+      try {
+        await api.post("/moodle/link", {});
+        const res = await api.get("/moodle/my-courses");
+        return res.data;
+      } catch (linkError: any) {
+        // Linking failed; provide both errors to help user troubleshoot
+        console.error("Failed to auto-link Moodle account:", linkError?.response?.data);
+        throw err; // Throw the original "not linked" error
+      }
     }
 
     throw err;

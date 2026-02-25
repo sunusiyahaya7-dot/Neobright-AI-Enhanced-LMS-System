@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getCourses, getCourseAssignments } from '../services/moodleService';
 import { progressService, ProgressOverview } from '../services/progressService';
@@ -7,8 +7,6 @@ import Layout from '../components/Layout';
 import AIChatPanel from '../components/AIChatPanel';
 import {
   BookOpen,
-  Clock,
-  AlertCircle,
   Search,
   Loader2,
   Sparkles,
@@ -68,7 +66,6 @@ export default function Courses() {
   const [selectedFilter, setSelectedFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [progressData, setProgressData] = useState<Record<number, ProgressOverview>>({});
-  const [progressLoading, setProgressLoading] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [studyPlanPrompt, setStudyPlanPrompt] = useState<string | undefined>(undefined);
   const [aiRecommendedIds, setAiRecommendedIds] = useState<Set<string>>(new Set());
@@ -114,7 +111,6 @@ export default function Courses() {
 
   const fetchProgress = async () => {
     try {
-      setProgressLoading(true);
       const overview = await progressService.getProgressOverview();
       console.log('Progress overview fetched:', overview);
       const progressMap: Record<number, ProgressOverview> = {};
@@ -126,8 +122,6 @@ export default function Courses() {
     } catch (err) {
       console.error('Failed to fetch progress overview:', err);
       // Continue without progress data
-    } finally {
-      setProgressLoading(false);
     }
   };
 
@@ -135,10 +129,6 @@ export default function Courses() {
     if (progress >= 75) return '#1ABC9C';
     if (progress >= 50) return '#1E5BF0';
     return '#FF6B6B';
-  };
-
-  const handleRefreshProgress = async () => {
-    await fetchProgress();
   };
 
   // Fetch real assignment deadlines from Moodle for each course
@@ -218,8 +208,17 @@ export default function Courses() {
   };
 
   // Has a real upcoming deadline (from Moodle assignment data)
+  const hasAnyRealDeadlines = Object.keys(courseDeadlines).length > 0;
   const hasUpcomingDeadline = (course: Course) => {
-    return course.id in courseDeadlines;
+    if (course.id in courseDeadlines) return true;
+
+    // If we couldn't fetch any real deadlines (or Moodle courses have none),
+    // fall back to the deterministic metadata so the filter isn't always empty.
+    if (!hasAnyRealDeadlines) {
+      return generateCourseMetadata(course.id).nextDeadline !== 'No upcoming deadlines';
+    }
+
+    return false;
   };
 
   // Most active: high engagement — real progress above average but NOT 100% complete
@@ -324,10 +323,24 @@ export default function Courses() {
                 <div className="bg-white dark:bg-[#1A1C20] rounded-2xl shadow-sm dark:shadow-none border border-transparent dark:border-[#2A2D32] p-12 text-center">
                   <BookOpen className="mx-auto text-gray-400 mb-4" size={64} />
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-                    No courses found
+                    {courses.length === 0
+                      ? 'No courses found'
+                      : selectedFilter === 'upcoming-deadlines'
+                        ? 'No upcoming deadlines'
+                        : selectedFilter === 'ai-recommended'
+                          ? 'No AI recommendations'
+                          : selectedFilter === 'most-active'
+                            ? 'No active courses yet'
+                            : 'No courses found'}
                   </h3>
                   <p className="text-gray-600 dark:text-gray-400">
-                    {searchQuery ? 'Try adjusting your search terms' : "You haven't enrolled in any courses yet"}
+                    {searchQuery
+                      ? 'Try adjusting your search terms'
+                      : courses.length === 0
+                        ? "You haven't enrolled in any courses yet"
+                        : selectedFilter === 'upcoming-deadlines'
+                          ? 'Assignments with due dates will show up here'
+                          : 'Try switching filters to view all courses'}
                   </p>
                 </div>
               ) : (
