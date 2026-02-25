@@ -329,7 +329,10 @@ def get_submission_details(course_id: int, assignment_id: int):
                                 break
                 
                 try:
-                    GradeCacheService.cache_grade(user_id, course_id, assignment_id, grade_data)
+                    cache_key = f"assign_{assignment_id}"
+                    grade_data.setdefault("itemType", "assign")
+                    grade_data.setdefault("itemId", assignment_id)
+                    GradeCacheService.cache_grade(user_id, course_id, cache_key, grade_data)
                 except Exception as cache_err:
                     print(f"Error caching grade: {cache_err}")
         

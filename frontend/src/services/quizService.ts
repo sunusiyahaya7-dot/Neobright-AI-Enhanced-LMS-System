@@ -17,7 +17,9 @@ export interface Quiz {
   finishedAttempts: number;
   hasInProgress: boolean;
   inProgressAttemptId: number | null;
+  timeExpired: boolean;
   bestGrade: number | null;
+  lastFinishedAttemptId: number | null;
 }
 
 export interface QuizAttempt {

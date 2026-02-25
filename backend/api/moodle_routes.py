@@ -68,12 +68,44 @@ def link_moodle_account():
                 "lookup": lookup
             }), 404
 
-        chosen = matches[0]
+        # Prefer a match that is actually enrolled in courses.
+        # core_user_get_users can return multiple accounts (duplicates, legacy users, etc.).
+        candidates = [m for m in matches if isinstance(m, dict) and m.get("id")]
+        if not candidates:
+            return jsonify({
+                "success": False,
+                "error": "Moodle user lookup did not return an id",
+                "lookup": lookup,
+                "matches": matches
+            }), 500
+
+        chosen = candidates[0]
+        chosen_course_count = None
+        if len(candidates) > 1:
+            best_match = None
+            best_count = -1
+
+            # Limit probes to avoid long latency if Moodle returns a huge list.
+            for m in candidates[:10]:
+                try:
+                    courses = MoodleService.get_user_courses(int(m["id"]))
+                    count = len(courses) if isinstance(courses, list) else 0
+                    if count > best_count:
+                        best_count = count
+                        best_match = m
+                except Exception:
+                    # If a candidate can't be checked, skip it.
+                    continue
+
+            if best_match is not None:
+                chosen = best_match
+                chosen_course_count = best_count
+
         moodle_user_id = chosen.get("id")
         if not moodle_user_id:
             return jsonify({
                 "success": False,
-                "error": "Moodle user lookup did not return an id",
+                "error": "Chosen Moodle user did not include an id",
                 "lookup": lookup,
                 "matches": matches
             }), 500
@@ -94,7 +126,8 @@ def link_moodle_account():
                 "moodle_username": chosen.get("username")
             },
             "lookup": lookup,
-            "match_count": len(matches)
+            "match_count": len(matches),
+            "chosen_course_count": chosen_course_count
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500

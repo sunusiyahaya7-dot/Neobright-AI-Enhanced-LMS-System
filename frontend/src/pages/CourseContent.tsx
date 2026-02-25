@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
+import { motion } from 'framer-motion';
 import Layout from '../components/Layout';
 import ModuleDetailsModal from '../components/ModuleDetailsModal';
 import AssignmentDetailsModal from '../components/AssignmentDetailsModal';
+import QuizAttemptView from '../components/QuizAttemptView';
+import QuizReviewModal from '../components/QuizReviewModal';
+import quizService, { Quiz } from '../services/quizService';
 import { MarkAsDoneButton } from '../components/MarkAsDoneButton';
 import { getCourseContents, getCourseAssignments } from '../services/moodleService';
 import { progressService, CourseProgress } from '../services/progressService';
@@ -19,6 +23,13 @@ import {
   Download,
   TrendingUp,
   RefreshCw,
+  Clock,
+  Play,
+  Eye,
+  Trophy,
+  RotateCcw,
+  Send,
+  CheckCircle2,
 } from 'lucide-react';
 
 interface CourseSummary {
@@ -93,14 +104,86 @@ export default function CourseContent() {
   const [chatPrompt, setChatPrompt] = useState<string | undefined>(undefined);
   const [courseInsights, setCourseInsights] = useState<{ insights: string[]; study_tip: string } | null>(null);
   const [insightsLoading, setInsightsLoading] = useState(true);
+
+  // Quiz state
+  const [quizzes, setQuizzes] = useState<Quiz[]>([]);
+  const [quizzesLoading, setQuizzesLoading] = useState(false);
+  const [activeQuizAttempt, setActiveQuizAttempt] = useState<{ quiz: Quiz; attemptId: number } | null>(null);
+  const [reviewAttempt, setReviewAttempt] = useState<{ quiz: Quiz; attemptId: number } | null>(null);
+  const [quizStartConfirm, setQuizStartConfirm] = useState<Quiz | null>(null);
+  const [startingQuiz, setStartingQuiz] = useState(false);
   
 
   useEffect(() => {
     if (id) {
       fetchCourseContent();
       fetchCourseInsights();
+      fetchQuizzes();
     }
   }, [id]);
+
+  // Fetch quizzes for this course
+  const fetchQuizzes = async () => {
+    try {
+      setQuizzesLoading(true);
+      const data = await quizService.getCourseQuizzes(Number(id));
+      setQuizzes(data);
+    } catch (err) {
+      console.error('Failed to fetch quizzes:', err);
+    } finally {
+      setQuizzesLoading(false);
+    }
+  };
+
+  const handleStartQuiz = (quiz: Quiz) => {
+    // If there's an in-progress attempt, resume directly — no confirmation needed
+    if (quiz.hasInProgress && quiz.inProgressAttemptId) {
+      setActiveQuizAttempt({ quiz, attemptId: quiz.inProgressAttemptId });
+      return;
+    }
+    // Show confirmation before starting a new attempt
+    setQuizStartConfirm(quiz);
+  };
+
+  const confirmStartQuiz = async () => {
+    if (!quizStartConfirm) return;
+    const quiz = quizStartConfirm;
+    try {
+      setStartingQuiz(true);
+      const attempt = await quizService.startAttempt(quiz.id);
+      setActiveQuizAttempt({ quiz, attemptId: attempt.id });
+      setQuizStartConfirm(null);
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || 'Failed to start quiz';
+      alert(msg);
+    } finally {
+      setStartingQuiz(false);
+    }
+  };
+
+  const handleQuizFinished = async () => {
+    const quiz = activeQuizAttempt?.quiz;
+    setActiveQuizAttempt(null);
+    fetchQuizzes(); // Refresh quiz list to show updated attempts
+
+    // Mark quiz activity as complete & refresh progress (best-effort)
+    if (quiz?.coursemodule && id) {
+      try {
+        await progressService.markActivityComplete(Number(id), quiz.coursemodule);
+      } catch (err) {
+        console.error('Failed to mark quiz complete:', err);
+      }
+      // Refresh progress bar + completion checkmarks
+      try {
+        await Promise.all([
+          fetchCourseProgress(),
+          fetchCompletions(),
+        ]);
+      } catch (err) {
+        console.error('Failed to refresh progress after quiz:', err);
+      }
+    }
+  };
 
   // Fetch AI course insights (cached — 6hr TTL)
   const fetchCourseInsights = async (force = false) => {
@@ -317,7 +400,7 @@ export default function CourseContent() {
                       [
                         { id: 'modules', label: `Modules (${sections.length})` },
                         { id: 'assignments', label: `Assignments (${assignments.length})` },
-                        { id: 'quizzes', label: 'Quizzes' },
+                        { id: 'quizzes', label: `Quizzes (${quizzes.length})` },
                         { id: 'grades', label: 'Grades' },
                       ] as const
                     ).map((tab) => (
@@ -392,12 +475,160 @@ export default function CourseContent() {
                         ))
                       )}
                     </div>
-                  ) : activeTab !== 'modules' ? (
-                    <div className="bg-white dark:bg-[#1A1C20] rounded-2xl p-8 shadow-sm dark:shadow-none border border-transparent dark:border-[#2A2D32]">
-                      <p className="text-gray-700 dark:text-gray-300">
-                        {activeTab} view coming next.
-                      </p>
-                    </div>
+                  ) : activeTab === 'quizzes' ? (
+                    activeQuizAttempt ? (
+                      <QuizAttemptView
+                        quiz={activeQuizAttempt.quiz}
+                        attemptId={activeQuizAttempt.attemptId}
+                        onFinish={handleQuizFinished}
+                        onCancel={() => { setActiveQuizAttempt(null); fetchQuizzes(); }}
+                      />
+                    ) : quizzesLoading ? (
+                      <div className="flex items-center justify-center py-16">
+                        <Loader2 className="animate-spin text-[#1E5BF0]" size={40} />
+                      </div>
+                    ) : quizzes.length === 0 ? (
+                      <div className="bg-white dark:bg-[#1A1C20] rounded-2xl p-10 shadow-sm dark:shadow-none border border-transparent dark:border-[#2A2D32] text-center">
+                        <FileText className="mx-auto text-gray-400" size={48} />
+                        <h4 className="mt-4 text-lg font-semibold text-gray-900 dark:text-white">No quizzes</h4>
+                        <p className="mt-2 text-gray-600 dark:text-gray-400">This course has no quizzes yet.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {quizzes.map((quiz) => {
+                          const isOpen = quiz.timeopen === 0 || quiz.timeopen * 1000 <= Date.now();
+                          const isClosed = quiz.timeclose !== 0 && quiz.timeclose * 1000 < Date.now();
+                          const hasFinished = quiz.finishedAttempts > 0;
+                          const canStartNew = isOpen && !isClosed && (quiz.maxattempts === 0 || quiz.finishedAttempts < quiz.maxattempts);
+                          const hasActiveInProgress = quiz.hasInProgress && !quiz.timeExpired;
+                          const hasExpiredInProgress = quiz.hasInProgress && quiz.timeExpired;
+                          const maxAttemptsReached = quiz.maxattempts > 0 && quiz.finishedAttempts >= quiz.maxattempts;
+
+                          return (
+                            <motion.div
+                              key={quiz.id}
+                              initial={{ opacity: 0, y: 8 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              className="bg-white dark:bg-[#1A1C20] rounded-2xl shadow-sm dark:shadow-none border border-transparent dark:border-[#2A2D32] hover:border-[#1E5BF0]/40 dark:hover:border-[#2C7CF0]/40 hover:shadow-md transition-all overflow-hidden"
+                            >
+                              {/* Quiz card main content */}
+                              <div className="p-5">
+                                <div className="flex items-start justify-between gap-4">
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <h3 className="text-base font-bold text-gray-900 dark:text-white">{quiz.name}</h3>
+                                      {/* Status badges */}
+                                      {hasActiveInProgress && (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-[11px] font-bold rounded-md uppercase tracking-wide">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                          In Progress
+                                        </span>
+                                      )}
+                                      {hasExpiredInProgress && (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[11px] font-bold rounded-md uppercase tracking-wide">
+                                          Time Expired
+                                        </span>
+                                      )}
+                                      {maxAttemptsReached && !hasActiveInProgress && !hasExpiredInProgress && (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 text-[11px] font-bold rounded-md uppercase tracking-wide">
+                                          <CheckCircle2 size={10} /> Completed
+                                        </span>
+                                      )}
+                                      {isClosed && !hasActiveInProgress && (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400 text-[11px] font-bold rounded-md uppercase tracking-wide">
+                                          Closed
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                                      {quiz.timelimit > 0 && (
+                                        <span className="flex items-center gap-1">
+                                          <Clock size={11} /> {Math.floor(quiz.timelimit / 60)} min
+                                        </span>
+                                      )}
+                                      <span>Max: {quiz.grade} pts</span>
+                                      <span>
+                                        {quiz.finishedAttempts} / {quiz.maxattempts > 0 ? quiz.maxattempts : '∞'} attempts
+                                      </span>
+                                      {quiz.bestGrade !== null && (
+                                        <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
+                                          <Trophy size={11} /> Best: {quiz.bestGrade}/{quiz.grade}
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    {quiz.intro && (
+                                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-2 line-clamp-2"
+                                         dangerouslySetInnerHTML={{ __html: quiz.intro }} />
+                                    )}
+                                  </div>
+
+                                  {/* Action buttons */}
+                                  <div className="flex items-center gap-2 flex-shrink-0 pt-0.5">
+                                    {/* Resume — in-progress attempt */}
+                                    {hasActiveInProgress ? (
+                                      <button
+                                        onClick={() => setActiveQuizAttempt({ quiz, attemptId: quiz.inProgressAttemptId! })}
+                                        className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-semibold hover:from-amber-600 hover:to-orange-600 transition-all shadow-sm"
+                                      >
+                                        <RotateCcw size={14} /> Resume
+                                      </button>
+                                    ) : hasExpiredInProgress ? (
+                                      <button
+                                        onClick={async () => {
+                                          try {
+                                            await quizService.submitAttempt(quiz.id, quiz.inProgressAttemptId!, true);
+                                            fetchQuizzes();
+                                          } catch (err) {
+                                            console.error('Failed to submit expired attempt:', err);
+                                            fetchQuizzes();
+                                          }
+                                        }}
+                                        className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-red-500 to-rose-500 text-white text-sm font-semibold hover:from-red-600 hover:to-rose-600 transition-all shadow-sm"
+                                      >
+                                        <Send size={14} /> Submit Expired
+                                      </button>
+                                    ) : (
+                                      <>
+                                        {/* Review button (if has finished attempts) */}
+                                        {hasFinished && (
+                                          <button
+                                            onClick={() => setReviewAttempt({ quiz, attemptId: quiz.lastFinishedAttemptId! })}
+                                            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gray-100 dark:bg-[#111418] text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-[#1E2025] transition-all text-sm font-semibold border border-gray-200 dark:border-[#2A2D32]"
+                                          >
+                                            <Eye size={14} /> Review
+                                          </button>
+                                        )}
+                                        {/* Start / Retry button */}
+                                        {canStartNew && !isClosed && (
+                                          <button
+                                            onClick={() => handleStartQuiz(quiz)}
+                                            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-[#1E5BF0] to-[#2C7CF0] text-white text-sm font-semibold hover:from-[#184AD0] hover:to-[#2468D0] transition-all shadow-sm"
+                                          >
+                                            <Play size={14} /> {hasFinished ? 'Retry' : 'Start Quiz'}
+                                          </button>
+                                        )}
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Attempt History — collapsible bottom section */}
+                              {quiz.finishedAttempts > 0 && (
+                                <div className="px-5 pb-4 pt-0">
+                                  <div className="pt-3 border-t border-gray-100 dark:border-[#2A2D32]">
+                                    <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 mb-2 uppercase tracking-wider">Attempt History</p>
+                                    <QuizAttemptHistory quiz={quiz} onReview={(attemptId) => setReviewAttempt({ quiz, attemptId })} />
+                                  </div>
+                                </div>
+                              )}
+                            </motion.div>
+                          );
+                        })}
+                      </div>
+                    )
                   ) : (
                     <>
                       {/* AI Auto Insights */}
@@ -693,7 +924,107 @@ export default function CourseContent() {
           }}
         />
       )}
+
+      {/* Quiz Review Modal */}
+      {reviewAttempt && (
+        <QuizReviewModal
+          isOpen={!!reviewAttempt}
+          onClose={() => setReviewAttempt(null)}
+          quiz={reviewAttempt.quiz}
+          attemptId={reviewAttempt.attemptId}
+        />
+      )}
+
+      {/* Quiz Start Confirmation Dialog */}
+      {quizStartConfirm && (
+        <>
+          <div className="fixed inset-0 bg-black/50 z-40" onClick={() => !startingQuiz && setQuizStartConfirm(null)} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-white dark:bg-[#1A1C20] rounded-2xl p-6 shadow-2xl max-w-sm w-full border border-gray-200 dark:border-[#2A2D32]"
+            >
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-full bg-[#1E5BF0]/10 flex items-center justify-center">
+                  <Play size={20} className="text-[#1E5BF0]" />
+                </div>
+                <h3 className="text-lg font-bold text-gray-900 dark:text-white">Start Quiz?</h3>
+              </div>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
+                You are about to start <strong>{quizStartConfirm.name}</strong>.
+              </p>
+              <div className="text-xs text-gray-500 dark:text-gray-400 space-y-1 mb-6">
+                {quizStartConfirm.timelimit > 0 && (
+                  <p className="flex items-center gap-1"><Clock size={12} /> Time limit: {Math.floor(quizStartConfirm.timelimit / 60)} minutes</p>
+                )}
+                <p>Maximum grade: {quizStartConfirm.grade}</p>
+                {quizStartConfirm.maxattempts > 0 && (
+                  <p>Attempts remaining: {quizStartConfirm.maxattempts - quizStartConfirm.finishedAttempts}</p>
+                )}
+              </div>
+              <div className="flex items-center gap-3 justify-end">
+                <button
+                  onClick={() => setQuizStartConfirm(null)}
+                  disabled={startingQuiz}
+                  className="px-4 py-2 rounded-xl bg-gray-100 dark:bg-[#111418] text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-[#1E2025] transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmStartQuiz}
+                  disabled={startingQuiz}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-[#1E5BF0] to-[#2C7CF0] text-white hover:from-[#184AD0] hover:to-[#2468D0] transition-all font-semibold disabled:opacity-50"
+                >
+                  {startingQuiz ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+                  {startingQuiz ? 'Starting...' : 'Start Quiz'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        </>
+      )}
     </Layout>
+  );
+}
+
+// ── Inline sub-component: QuizAttemptHistory ─────────────────────────────
+function QuizAttemptHistory({ quiz, onReview }: { quiz: Quiz; onReview: (attemptId: number) => void }) {
+  const [attempts, setAttempts] = useState<import('../services/quizService').QuizAttempt[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    quizService.getQuizAttempts(quiz.id).then((data) => {
+      setAttempts(data.filter((a) => a.state === 'finished'));
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [quiz.id]);
+
+  if (loading) return <Loader2 className="animate-spin text-gray-400" size={16} />;
+  if (attempts.length === 0) return <p className="text-xs text-gray-400">No finished attempts.</p>;
+
+  return (
+    <div className="space-y-1.5">
+      {attempts.map((a) => (
+        <div key={a.id} className="flex items-center justify-between text-xs">
+          <div className="flex items-center gap-3">
+            <span className="text-gray-700 dark:text-gray-300">Attempt {a.attempt}</span>
+            <span className="text-gray-400">
+              {new Date(a.timefinish * 1000).toLocaleDateString()} {new Date(a.timefinish * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+            <span className="font-semibold text-gray-800 dark:text-gray-200">
+              {a.sumgrades !== null ? `${a.sumgrades}/${quiz.grade}` : '—'}
+            </span>
+          </div>
+          <button
+            onClick={() => onReview(a.id)}
+            className="flex items-center gap-1 text-[#1E5BF0] hover:text-[#184AD0] font-semibold"
+          >
+            <Eye size={12} /> Review
+          </button>
+        </div>
+      ))}
+    </div>
   );
 }
 

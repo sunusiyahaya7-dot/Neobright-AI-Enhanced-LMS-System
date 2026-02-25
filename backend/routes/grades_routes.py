@@ -33,7 +33,7 @@ def sync_course_grades(course_id: int):
                 "message": "Link your Moodle account first"
             }), 400
 
-        synced_grades: dict[int, dict] = {}
+        synced_grades: dict[str, dict] = {}
         failed_items: list[dict] = []
         moodle_error = None
 
@@ -49,31 +49,37 @@ def sync_course_grades(course_id: int):
 
             for item in gradeitems:
                 try:
-                    if item.get("itemmodule") != "assign":
+                    module = item.get("itemmodule") or ""
+                    if module not in ("assign", "quiz"):
                         continue
 
-                    assignment_id = item.get("iteminstance")
-                    if assignment_id is None:
+                    instance_id = item.get("iteminstance")
+                    if instance_id is None:
                         continue
 
-                    assignment_id_int = int(assignment_id)
+                    instance_id_int = int(instance_id)
 
                     grade_raw = item.get("graderaw")
                     grade_max = item.get("grademax")
                     feedback = item.get("feedback") or item.get("feedbackformatted")
                     graded_date = item.get("gradedategraded") or item.get("gradedate")
-                    assignment_name = item.get("itemname") or f"Assignment {assignment_id_int}"
+                    item_name = item.get("itemname") or (f"Quiz {instance_id_int}" if module == "quiz" else f"Assignment {instance_id_int}")
+
+                    # Using a prefixed key so quiz and assignment don't collide.
+                    cache_key = f"{module}_{instance_id_int}"
 
                     grade_data = {
                         "grade": grade_raw,
                         "gradeMax": grade_max if grade_max is not None else 100,
                         "feedback": feedback,
                         "gradeddate": graded_date,
-                        "assignmentName": assignment_name,
+                        "assignmentName": item_name,
+                        "itemType": module,
+                        "itemId": instance_id_int,
                     }
 
-                    GradeCacheService.cache_grade(firebase_uid, course_id, assignment_id_int, grade_data)
-                    synced_grades[assignment_id_int] = grade_data
+                    GradeCacheService.cache_grade(firebase_uid, course_id, cache_key, grade_data)
+                    synced_grades[cache_key] = grade_data
                 except Exception as item_err:
                     failed_items.append({
                         "item": item,
@@ -83,7 +89,7 @@ def sync_course_grades(course_id: int):
             print(f"Warning: Could not fetch from Moodle: {moodle_err}")
             moodle_error = str(moodle_err)
 
-        # Always merge in existing cache (even if Moodle fetch failed)
+        # Merging in existing cache (even if Moodle fetch failed)
         try:
             existing_cache = GradeCacheService.get_all_cached_grades(firebase_uid, course_id)
             for assignment_id_int, cached in existing_cache.items():

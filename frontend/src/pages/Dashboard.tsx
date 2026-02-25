@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthContext';
 import { getUserProfile } from '../services/userService';
 import { getCourses, getCourseAssignments } from '../services/moodleService';
 import { progressService, ProgressOverview } from '../services/progressService';
+import { gradeCacheService } from '../services/gradeCacheService';
 import api from '../api/client';
 import Layout from '../components/Layout';
 import AIChatPanel from '../components/AIChatPanel';
@@ -130,6 +131,31 @@ export default function Dashboard() {
           setAverageGrade(Math.round(avgGrade));
         } else {
           setAverageGrade(0);
+        }
+
+        // Fetch quiz average from grade cache across all courses
+        try {
+          const allQuizGrades: { grade: number; gradeMax: number }[] = [];
+          await Promise.all(
+            courseList.map(async (course: Course) => {
+              try {
+                const cached = await gradeCacheService.getAllCachedGrades(course.id);
+                const grades = cached?.grades || {};
+                Object.entries(grades).forEach(([key, g]: [string, any]) => {
+                  const isQuiz = g?.itemType === 'quiz' || key.startsWith('quiz_');
+                  if (isQuiz && g?.grade != null && g?.gradeMax) {
+                    allQuizGrades.push({ grade: g.grade, gradeMax: g.gradeMax });
+                  }
+                });
+              } catch { /* ignore per-course failures */ }
+            })
+          );
+          if (allQuizGrades.length > 0) {
+            const totalPct = allQuizGrades.reduce((s, q) => s + (q.grade / q.gradeMax) * 100, 0);
+            setAverageGrade(Math.round(totalPct / allQuizGrades.length));
+          }
+        } catch (err) {
+          console.error('Failed to compute quiz average:', err);
         }
 
         // Compute assignment due and done stats

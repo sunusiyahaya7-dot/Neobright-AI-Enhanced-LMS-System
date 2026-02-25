@@ -633,6 +633,7 @@ class MoodleService:
                 "quizid": quiz_id,
                 "userid": user_id,
                 "status": status,
+                "includepreviews": 1,
             }
 
             response = MoodleService._request("GET", url, params=params, timeout=10)

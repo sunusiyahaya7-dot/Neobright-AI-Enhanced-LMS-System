@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { gradeCacheService } from '../services/gradeCacheService';
-import { AlertCircle, BookOpen, Loader2, TrendingUp, TrendingDown } from 'lucide-react';
+import { AlertCircle, BookOpen, ClipboardList, Loader2, TrendingUp, TrendingDown } from 'lucide-react';
 
 interface Grade {
   grade: number | null;
@@ -8,6 +8,8 @@ interface Grade {
   feedback: string | null;
   gradeddate: number | null;
   assignmentName?: string;
+  itemType?: string;
+  itemId?: number;
 }
 
 interface GradesData {
@@ -164,7 +166,7 @@ export default function GradesContent({ courseId }: GradesContentProps) {
           No grades yet
         </h3>
         <p className="text-gray-600 dark:text-gray-400 mt-2">
-          Complete assignments to see your grades here
+          Complete assignments and quizzes to see your grades here
         </p>
       </div>
     );
@@ -262,7 +264,10 @@ export default function GradesContent({ courseId }: GradesContentProps) {
             <thead>
               <tr className="border-b border-gray-200 dark:border-[#2A2D32] bg-gray-50 dark:bg-[#111418]">
                 <th className="px-6 py-4 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                  Assignment
+                  Type
+                </th>
+                <th className="px-6 py-4 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+                  Item
                 </th>
                 <th className="px-6 py-4 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
                   Grade
@@ -279,7 +284,7 @@ export default function GradesContent({ courseId }: GradesContentProps) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-[#2A2D32]">
-              {gradesList.map(([assignmentId, grade]) => {
+              {gradesList.map(([itemKey, grade]) => {
                 const percentage =
                   grade.grade !== null
                     ? ((grade.grade / grade.gradeMax) * 100).toFixed(1)
@@ -287,15 +292,29 @@ export default function GradesContent({ courseId }: GradesContentProps) {
                 const gradedDate = grade.gradeddate
                   ? new Date(grade.gradeddate * 1000).toLocaleDateString()
                   : null;
+                const isQuiz = grade.itemType === 'quiz' || itemKey.startsWith('quiz_');
 
                 return (
                   <tr
-                    key={assignmentId}
+                    key={itemKey}
                     className="hover:bg-gray-50 dark:hover:bg-[#111418] transition-colors"
                   >
                     <td className="px-6 py-4">
+                      {isQuiz ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 text-xs font-semibold">
+                          <ClipboardList size={13} />
+                          Quiz
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs font-semibold">
+                          <BookOpen size={13} />
+                          Assignment
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
                       <p className="font-medium text-gray-900 dark:text-white">
-                        {grade.assignmentName || `Assignment ${assignmentId}`}
+                        {grade.assignmentName || (isQuiz ? `Quiz ${itemKey}` : `Assignment ${itemKey}`)}
                       </p>
                     </td>
                     <td className="px-6 py-4">

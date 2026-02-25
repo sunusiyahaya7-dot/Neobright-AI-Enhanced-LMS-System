@@ -8,6 +8,7 @@ from services.firestore_service import FirestoreService
 from services.moodle_service import MoodleService
 from services.progress_service import ProgressService
 from services.analytics_service import AnalyticsService
+from services.grade_cache_service import GradeCacheService
 
 
 class AIContextService:
@@ -209,6 +210,38 @@ class AIContextService:
             except Exception as e:
                 print(f"Error building assignments context: {e}")
 
+            # ========== STEP 3.6: Get Quiz Grades from Cache ==========
+            quizzes_context = []
+            try:
+                for course in moodle_courses:
+                    course_id = course.get("id")
+                    course_name = course.get("fullname", "Unknown")
+                    try:
+                        cached_grades = GradeCacheService.get_all_cached_grades(firebase_uid, course_id)
+                        for key, grade_data in cached_grades.items():
+                            item_type = grade_data.get("itemType") or ""
+                            is_quiz = item_type == "quiz" or str(key).startswith("quiz_")
+                            if not is_quiz:
+                                continue
+                            grade_val = grade_data.get("grade")
+                            grade_max = grade_data.get("gradeMax", 10)
+                            pct = round((grade_val / grade_max) * 100, 1) if grade_val is not None and grade_max else None
+                            quiz_info = {
+                                "name": grade_data.get("assignmentName") or f"Quiz {key}",
+                                "course": course_name,
+                                "score": grade_val,
+                                "maxScore": grade_max,
+                                "percentage": pct,
+                                "gradedDate": grade_data.get("gradeddate"),
+                                "status": "graded" if grade_val is not None else "not graded",
+                            }
+                            quizzes_context.append(quiz_info)
+                    except Exception as e:
+                        print(f"Error fetching quiz grades for course {course_id}: {e}")
+                        continue
+            except Exception as e:
+                print(f"Error building quizzes context: {e}")
+
             # ========== STEP 4: Get Overall Analytics ==========
             analytics_context = {
                 "overallProgress": 0,
@@ -250,6 +283,7 @@ class AIContextService:
                 "student": student_info,
                 "courses": courses_context,
                 "assignments": assignments_context,
+                "quizzes": quizzes_context,
                 "analytics": analytics_context,
                 "timestamp": datetime.utcnow().isoformat()
             }

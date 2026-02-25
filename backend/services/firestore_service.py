@@ -254,3 +254,67 @@ class FirestoreService:
         )
         enrollments = [doc.to_dict() for doc in docs]
         return enrollments[0] if enrollments else None
+
+    # ==================== QUIZ ATTEMPTS ====================
+
+    def upsert_quiz_attempt(
+        self,
+        firebase_uid: str,
+        moodle_user_id: int,
+        quiz_id: int,
+        attempt_id: int,
+        attempt_data: Dict,
+        extra: Optional[Dict] = None,
+    ) -> None:
+        """Upsert a Moodle quiz attempt snapshot for later caching/analytics.
+
+        Stored in top-level collection `quiz_attempts` keyed by Moodle attempt_id
+        so the same attempt is not duplicated across re-fetches.
+        """
+        extra = extra or {}
+
+        # Extract common fields for easy querying.
+        state = attempt_data.get("state") if isinstance(attempt_data, dict) else None
+        preview = bool(attempt_data.get("preview")) if isinstance(attempt_data, dict) else False
+
+        payload = {
+            "attempt_id": int(attempt_id),
+            "quiz_id": int(quiz_id),
+            "firebase_uid": firebase_uid,
+            "moodle_user_id": int(moodle_user_id),
+            "state": state,
+            "preview": preview,
+            "timestart": attempt_data.get("timestart"),
+            "timefinish": attempt_data.get("timefinish"),
+            "timemodified": attempt_data.get("timemodified"),
+            "sumgrades": attempt_data.get("sumgrades"),
+            "attempt_number": attempt_data.get("attempt"),
+            "last_synced_at": datetime.utcnow(),
+            # Keep the raw attempt payload for future fields.
+            "attempt": attempt_data,
+            **extra,
+        }
+
+        self.db.collection("quiz_attempts").document(str(attempt_id)).set(payload, merge=True)
+
+    def add_quiz_attempt_event(
+        self,
+        firebase_uid: str,
+        moodle_user_id: int,
+        quiz_id: int,
+        attempt_id: int,
+        event: str,
+        details: Optional[Dict] = None,
+    ) -> None:
+        """Append an event for an attempt (start/save/submit/review)."""
+        details = details or {}
+        payload = {
+            "firebase_uid": firebase_uid,
+            "moodle_user_id": int(moodle_user_id),
+            "quiz_id": int(quiz_id),
+            "attempt_id": int(attempt_id),
+            "event": event,
+            "details": details,
+            "created_at": datetime.utcnow(),
+        }
+        self.db.collection("quiz_attempt_events").add(payload)
