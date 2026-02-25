@@ -161,6 +161,19 @@ def start_attempt(quiz_id: int):
         try:
             data = MoodleService.start_quiz_attempt(quiz_id)
             attempt = data.get("attempt", {})
+
+            # Best-effort: persist attempt snapshot/event to Firestore
+            try:
+                fs = FirestoreService()
+                fs.upsert_quiz_attempt(g.firebase_uid, moodle_user_id, quiz_id, attempt.get("id"), attempt, {
+                    "source": "start_attempt",
+                })
+                fs.add_quiz_attempt_event(g.firebase_uid, moodle_user_id, quiz_id, attempt.get("id"), "start", {
+                    "resumed": False,
+                })
+            except Exception as log_err:
+                print(f"Firestore quiz logging failed (start): {log_err}")
+
             return jsonify({"success": True, "attempt": attempt}), 200
         except RuntimeError as re:
             # If Moodle says "attempt still in progress", find it and handle it
@@ -186,6 +199,19 @@ def start_attempt(quiz_id: int):
                         return jsonify({"success": True, "attempt": data.get("attempt", {})}), 200
                     else:
                         # Real in-progress attempt — return it for resume
+
+                        # Best-effort: persist resume event
+                        try:
+                            fs = FirestoreService()
+                            fs.upsert_quiz_attempt(g.firebase_uid, moodle_user_id, quiz_id, ip.get("id"), ip, {
+                                "source": "start_attempt",
+                            })
+                            fs.add_quiz_attempt_event(g.firebase_uid, moodle_user_id, quiz_id, ip.get("id"), "resume", {
+                                "resumed": True,
+                            })
+                        except Exception as log_err:
+                            print(f"Firestore quiz logging failed (resume): {log_err}")
+
                         return jsonify({"success": True, "attempt": ip, "resumed": True}), 200
             # Re-raise if it's a different error
             raise
@@ -208,8 +234,27 @@ def get_attempt_questions(quiz_id: int, attempt_id: int):
     Returns question HTML for a page of the attempt.
     """
     try:
+        moodle_user_id, err = _get_moodle_user_id()
+        if err:
+            return jsonify({"error": err[0]}), err[1]
+
         page = request.args.get("page", 0, type=int)
         data = MoodleService.get_attempt_data(attempt_id, page)
+
+        # Best-effort: persist snapshot/event to Firestore
+        try:
+            attempt = data.get("attempt", {}) or {}
+            fs = FirestoreService()
+            fs.upsert_quiz_attempt(g.firebase_uid, moodle_user_id, quiz_id, attempt_id, attempt, {
+                "source": "get_attempt_data",
+                "page": page,
+            })
+            fs.add_quiz_attempt_event(g.firebase_uid, moodle_user_id, quiz_id, attempt_id, "view_page", {
+                "page": page,
+                "questions": len(data.get("questions", []) or []),
+            })
+        except Exception as log_err:
+            print(f"Firestore quiz logging failed (get_attempt_data): {log_err}")
 
         return jsonify({
             "success": True,
@@ -238,6 +283,10 @@ def save_attempt(quiz_id: int, attempt_id: int):
     Saves current answers without finishing the attempt.
     """
     try:
+        moodle_user_id, err = _get_moodle_user_id()
+        if err:
+            return jsonify({"error": err[0]}), err[1]
+
         body = request.get_json(silent=True) or {}
         answer_data = body.get("data", [])
 
@@ -245,6 +294,25 @@ def save_attempt(quiz_id: int, attempt_id: int):
             return jsonify({"error": "No answer data provided"}), 400
 
         result = MoodleService.save_attempt_data(attempt_id, answer_data)
+
+        # Best-effort: log save event (do NOT store full answers long-term unless needed)
+        try:
+            fs = FirestoreService()
+            fs.upsert_quiz_attempt(g.firebase_uid, moodle_user_id, quiz_id, attempt_id, {
+                "id": attempt_id,
+                "quiz": quiz_id,
+                "userid": moodle_user_id,
+            }, {
+                "source": "save_attempt",
+                "last_saved_at": FirestoreService.timestamp_now(),
+                "last_saved_fields": len(answer_data),
+            })
+            fs.add_quiz_attempt_event(g.firebase_uid, moodle_user_id, quiz_id, attempt_id, "save", {
+                "fields": len(answer_data),
+            })
+        except Exception as log_err:
+            print(f"Firestore quiz logging failed (save): {log_err}")
+
         return jsonify({"success": True, "result": result}), 200
 
     except Exception as e:
@@ -270,10 +338,34 @@ def submit_attempt(quiz_id: int, attempt_id: int):
     Finishes the attempt and triggers grading.
     """
     try:
+        moodle_user_id, err = _get_moodle_user_id()
+        if err:
+            return jsonify({"error": err[0]}), err[1]
+
         body = request.get_json(silent=True) or {}
         time_up = body.get("timeup", False)
 
         result = MoodleService.submit_quiz_attempt(attempt_id, time_up=time_up)
+
+        # Best-effort: persist submit event
+        try:
+            fs = FirestoreService()
+            fs.upsert_quiz_attempt(g.firebase_uid, moodle_user_id, quiz_id, attempt_id, {
+                "id": attempt_id,
+                "quiz": quiz_id,
+                "userid": moodle_user_id,
+                "state": "finished",
+            }, {
+                "source": "submit_attempt",
+                "submitted_at": FirestoreService.timestamp_now(),
+                "timeup": bool(time_up),
+            })
+            fs.add_quiz_attempt_event(g.firebase_uid, moodle_user_id, quiz_id, attempt_id, "submit", {
+                "timeup": bool(time_up),
+            })
+        except Exception as log_err:
+            print(f"Firestore quiz logging failed (submit): {log_err}")
+
         return jsonify({"success": True, "result": result}), 200
 
     except Exception as e:
@@ -298,7 +390,27 @@ def review_attempt(quiz_id: int, attempt_id: int):
     Returns the graded review of a finished attempt with questions + answers.
     """
     try:
+        moodle_user_id, err = _get_moodle_user_id()
+        if err:
+            return jsonify({"error": err[0]}), err[1]
+
         data = MoodleService.get_quiz_attempt_review(attempt_id)
+
+        # Best-effort: persist grade snapshot
+        try:
+            fs = FirestoreService()
+            attempt = data.get("attempt", {}) or {}
+            fs.upsert_quiz_attempt(g.firebase_uid, moodle_user_id, quiz_id, attempt_id, attempt, {
+                "source": "review_attempt",
+                "grade": data.get("grade"),
+                "graded_at": FirestoreService.timestamp_now(),
+            })
+            fs.add_quiz_attempt_event(g.firebase_uid, moodle_user_id, quiz_id, attempt_id, "review", {
+                "grade": data.get("grade"),
+                "questions": len(data.get("questions", []) or []),
+            })
+        except Exception as log_err:
+            print(f"Firestore quiz logging failed (review): {log_err}")
 
         return jsonify({
             "success": True,
