@@ -51,16 +51,40 @@ def list_course_quizzes(course_id: int):
 
             # Fetch user attempts for this quiz
             attempts_data = MoodleService.get_quiz_user_attempts(quiz_id, moodle_user_id)
-            attempts = attempts_data.get("attempts", [])
+            all_attempts = attempts_data.get("attempts", [])
+
+            # Separate real attempts from preview attempts
+            attempts = [a for a in all_attempts if not a.get("preview")]
+            preview_attempts = [a for a in all_attempts if a.get("preview")]
 
             finished = [a for a in attempts if a.get("state") == "finished"]
             in_progress = [a for a in attempts if a.get("state") == "inprogress"]
+            # Also check preview attempts for stuck in-progress state
+            preview_in_progress = [a for a in preview_attempts if a.get("state") == "inprogress"]
 
             best_grade = None
             if finished:
                 grades = [a.get("sumgrades") for a in finished if a.get("sumgrades") is not None]
                 if grades:
                     best_grade = max(grades)
+
+            # Check if in-progress attempt has expired (time limit exceeded)
+            timelimit = q.get("timelimit", 0)
+            time_expired = False
+            in_progress_id = None
+            # Check both real and preview in-progress attempts
+            ip_list = in_progress or preview_in_progress
+            if ip_list:
+                ip = ip_list[0]
+                in_progress_id = ip.get("id")
+                if timelimit > 0:
+                    import time as _time
+                    elapsed = int(_time.time()) - ip.get("timestart", 0)
+                    if elapsed >= timelimit:
+                        time_expired = True
+
+            # Get last finished attempt id for review
+            last_finished_id = finished[-1].get("id") if finished else None
 
             results.append({
                 "id": quiz_id,
@@ -69,15 +93,17 @@ def list_course_quizzes(course_id: int):
                 "intro": q.get("intro", ""),
                 "timeopen": q.get("timeopen"),
                 "timeclose": q.get("timeclose"),
-                "timelimit": q.get("timelimit"),
+                "timelimit": timelimit,
                 "grade": q.get("grade"),
                 "maxattempts": q.get("attempts"),            # 0 = unlimited
                 "grademethod": q.get("grademethod"),
                 "totalAttempts": len(attempts),
                 "finishedAttempts": len(finished),
-                "hasInProgress": len(in_progress) > 0,
-                "inProgressAttemptId": in_progress[0].get("id") if in_progress else None,
+                "hasInProgress": len(ip_list) > 0,
+                "inProgressAttemptId": in_progress_id,
+                "timeExpired": time_expired,
                 "bestGrade": best_grade,
+                "lastFinishedAttemptId": last_finished_id,
             })
 
         return jsonify({"success": True, "quizzes": results}), 200
@@ -105,7 +131,9 @@ def get_quiz_attempts(quiz_id: int):
             return jsonify({"error": err[0]}), err[1]
 
         data = MoodleService.get_quiz_user_attempts(quiz_id, moodle_user_id)
-        return jsonify({"success": True, "attempts": data.get("attempts", [])}), 200
+        # Filter out preview attempts from the list shown to students
+        real_attempts = [a for a in data.get("attempts", []) if not a.get("preview")]
+        return jsonify({"success": True, "attempts": real_attempts}), 200
 
     except Exception as e:
         print(f"Error fetching attempts for quiz {quiz_id}: {e}")
@@ -122,17 +150,45 @@ def start_attempt(quiz_id: int):
     """
     POST /api/quizzes/<quiz_id>/attempt/start
 
-    Starts a new quiz attempt and returns the attempt object.
+    Starts a new quiz attempt.  If there is already an in-progress attempt,
+    return it instead of erroring out so the frontend can resume.
     """
     try:
         moodle_user_id, err = _get_moodle_user_id()
         if err:
             return jsonify({"error": err[0]}), err[1]
 
-        data = MoodleService.start_quiz_attempt(quiz_id)
-        attempt = data.get("attempt", {})
-
-        return jsonify({"success": True, "attempt": attempt}), 200
+        try:
+            data = MoodleService.start_quiz_attempt(quiz_id)
+            attempt = data.get("attempt", {})
+            return jsonify({"success": True, "attempt": attempt}), 200
+        except RuntimeError as re:
+            # If Moodle says "attempt still in progress", find it and handle it
+            if "attemptstillinprogress" in str(re).lower() or "still in progress" in str(re).lower():
+                attempts_data = MoodleService.get_quiz_user_attempts(quiz_id, moodle_user_id)
+                all_attempts = attempts_data.get("attempts", [])
+                in_progress = [
+                    a for a in all_attempts
+                    if a.get("state") == "inprogress"
+                ]
+                if in_progress:
+                    ip = in_progress[0]
+                    # If it's a preview or its time has expired, auto-submit it and retry
+                    is_preview = bool(ip.get("preview"))
+                    if is_preview:
+                        print(f"Auto-submitting stuck preview attempt {ip.get('id')}...")
+                        try:
+                            MoodleService.submit_quiz_attempt(ip.get("id"), timeup=True)
+                        except Exception as sub_err:
+                            print(f"Failed to submit preview: {sub_err}")
+                        # Retry starting
+                        data = MoodleService.start_quiz_attempt(quiz_id)
+                        return jsonify({"success": True, "attempt": data.get("attempt", {})}), 200
+                    else:
+                        # Real in-progress attempt — return it for resume
+                        return jsonify({"success": True, "attempt": ip, "resumed": True}), 200
+            # Re-raise if it's a different error
+            raise
 
     except Exception as e:
         print(f"Error starting attempt for quiz {quiz_id}: {e}")
@@ -192,6 +248,11 @@ def save_attempt(quiz_id: int, attempt_id: int):
         return jsonify({"success": True, "result": result}), 200
 
     except Exception as e:
+        # Moodle returns: moodle_quiz_exception - This attempt has already been finished.
+        msg = str(e)
+        if "already been finished" in msg.lower():
+            return jsonify({"error": "Attempt already finished", "code": "ATTEMPT_FINISHED"}), 409
+
         print(f"Error saving attempt {attempt_id}: {e}")
         import traceback
         traceback.print_exc()
@@ -216,6 +277,10 @@ def submit_attempt(quiz_id: int, attempt_id: int):
         return jsonify({"success": True, "result": result}), 200
 
     except Exception as e:
+        msg = str(e)
+        if "already been finished" in msg.lower():
+            return jsonify({"success": True, "result": {"state": "finished", "alreadyFinished": True}}), 200
+
         print(f"Error submitting attempt {attempt_id}: {e}")
         import traceback
         traceback.print_exc()
