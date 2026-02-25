@@ -1,6 +1,8 @@
 """Grade caching service - stores and retrieves grades from Firestore."""
 
+import re
 from datetime import datetime
+
 from services.firestore_service import FirestoreService
 from typing import Dict, Optional
 
@@ -10,6 +12,25 @@ class GradeCacheService:
 
     CACHE_COLLECTION = "grade_cache"
     CACHE_TTL_SECONDS = 3600  # 1 hour TTL for cache
+
+    @staticmethod
+    def _normalise_cache_key(raw_key: str, grade_data: Optional[Dict] = None) -> str:
+        """Normalise legacy keys to the new prefixed format.
+
+        New format:
+        - assignments: 'assign_<id>'
+        - quizzes: 'quiz_<id>'
+
+        Legacy format:
+        - '<id>' (numeric doc id)
+        """
+        key = str(raw_key)
+        if re.fullmatch(r"\d+", key):
+            item_type = (grade_data or {}).get("itemType")
+            if item_type == "quiz":
+                return f"quiz_{int(key)}"
+            return f"assign_{int(key)}"
+        return key
 
     @staticmethod
     def cache_grade(
@@ -32,7 +53,7 @@ class GradeCacheService:
         try:
             fs = FirestoreService()
             # Normalise key so both old (int) and new (str) callers work.
-            safe_key = str(item_key)
+            safe_key = GradeCacheService._normalise_cache_key(str(item_key), grade_data)
             cache_path = f"{GradeCacheService.CACHE_COLLECTION}/{firebase_uid}/courses/{course_id}/assignments/{safe_key}"
 
             cache_entry = {
@@ -75,16 +96,23 @@ class GradeCacheService:
         """
         try:
             fs = FirestoreService()
-            cache_key = f"{GradeCacheService.CACHE_COLLECTION}/{firebase_uid}/courses/{course_id}/assignments/{assignment_id}"
-            
-            doc = fs.db.document(cache_key).get()
-            if doc.exists:
-                data = doc.to_dict()
-                print(f"Retrieved cached grade for assignment {assignment_id}: {data}")
-                return data
-            else:
-                print(f"No cached grade found for assignment {assignment_id}")
-                return None
+
+            # Prefer new format, but fall back to legacy numeric key.
+            candidate_keys = [
+                f"assign_{int(assignment_id)}",
+                str(int(assignment_id)),
+            ]
+
+            for candidate in candidate_keys:
+                cache_key = f"{GradeCacheService.CACHE_COLLECTION}/{firebase_uid}/courses/{course_id}/assignments/{candidate}"
+                doc = fs.db.document(cache_key).get()
+                if doc.exists:
+                    data = doc.to_dict()
+                    print(f"Retrieved cached grade for assignment {assignment_id} (key={candidate}): {data}")
+                    return data
+
+            print(f"No cached grade found for assignment {assignment_id}")
+            return None
         except Exception as e:
             print(f"Error retrieving cached grade: {e}")
             import traceback
@@ -112,11 +140,29 @@ class GradeCacheService:
             docs = fs.db.collection(base_path).stream()
 
             result: Dict[str, Dict] = {}
+
+            def _pick_newer(existing: Dict, incoming: Dict) -> Dict:
+                existing_ts = existing.get("synced_at") or existing.get("cached_at")
+                incoming_ts = incoming.get("synced_at") or incoming.get("cached_at")
+                if isinstance(existing_ts, datetime) and isinstance(incoming_ts, datetime):
+                    return incoming if incoming_ts >= existing_ts else existing
+                # Prefer entries that include itemType/itemId when timestamps aren't comparable.
+                existing_has_type = bool(existing.get("itemType"))
+                incoming_has_type = bool(incoming.get("itemType"))
+                if incoming_has_type and not existing_has_type:
+                    return incoming
+                return existing
+
             for doc in docs:
                 data = doc.to_dict() or {}
-                # Use the Firestore document id as the key (e.g. 'quiz_1', 'assign_3')
-                doc_key = doc.id
-                result[doc_key] = data
+                raw_key = doc.id
+                norm_key = GradeCacheService._normalise_cache_key(raw_key, data)
+
+                if norm_key in result:
+                    # If both legacy and new exist for same item, keep the newer/better one.
+                    result[norm_key] = _pick_newer(result[norm_key], data)
+                else:
+                    result[norm_key] = data
             
             print(f"Retrieved {len(result)} cached grades for course {course_id}")
             return result
@@ -145,8 +191,11 @@ class GradeCacheService:
             
             if assignment_id:
                 # Clear specific assignment
-                cache_key = f"{GradeCacheService.CACHE_COLLECTION}/{firebase_uid}/courses/{course_id}/assignments/{assignment_id}"
-                fs.db.document(cache_key).delete()
+                numeric_key = str(int(assignment_id))
+                prefixed_key = f"assign_{int(assignment_id)}"
+                for key in (prefixed_key, numeric_key):
+                    cache_key = f"{GradeCacheService.CACHE_COLLECTION}/{firebase_uid}/courses/{course_id}/assignments/{key}"
+                    fs.db.document(cache_key).delete()
                 print(f"Cleared cache for assignment {assignment_id}")
             else:
                 # Clear all assignments for course
