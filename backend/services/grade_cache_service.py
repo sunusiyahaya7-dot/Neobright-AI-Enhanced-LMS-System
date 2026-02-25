@@ -15,41 +15,42 @@ class GradeCacheService:
     def cache_grade(
         firebase_uid: str,
         course_id: int,
-        assignment_id: int,
+        item_key,
         grade_data: Dict
     ) -> None:
         """
-        Store assignment grade in Firestore cache.
-        
+        Store a grade item in Firestore cache.
+
         Args:
             firebase_uid: User's Firebase UID
             course_id: Moodle course ID
-            assignment_id: Moodle assignment ID
-            grade_data: Grade info including:
-                - grade: Student's grade (float or null)
-                - gradeMax: Maximum grade (int)
-                - feedback: Feedback text (string or null)
-                - gradeddate: Timestamp when graded (int or null)
-                - assignmentName: Name of the assignment (string, optional)
+            item_key: Cache key – either an int (legacy assignment_id) or a
+                      string like 'assign_3' / 'quiz_1'.
+            grade_data: Grade info (grade, gradeMax, feedback, gradeddate,
+                        assignmentName, itemType, itemId).
         """
         try:
             fs = FirestoreService()
-            cache_key = f"{GradeCacheService.CACHE_COLLECTION}/{firebase_uid}/courses/{course_id}/assignments/{assignment_id}"
-            
+            # Normalise key so both old (int) and new (str) callers work.
+            safe_key = str(item_key)
+            cache_path = f"{GradeCacheService.CACHE_COLLECTION}/{firebase_uid}/courses/{course_id}/assignments/{safe_key}"
+
             cache_entry = {
                 "course_id": course_id,
-                "assignment_id": assignment_id,
+                "assignment_id": grade_data.get("itemId") or safe_key,
                 "grade": grade_data.get("grade"),
                 "gradeMax": grade_data.get("gradeMax", 100),
                 "feedback": grade_data.get("feedback"),
                 "gradeddate": grade_data.get("gradeddate"),
                 "assignmentName": grade_data.get("assignmentName"),
+                "itemType": grade_data.get("itemType", "assign"),
+                "itemId": grade_data.get("itemId"),
                 "cached_at": datetime.utcnow(),
                 "synced_at": datetime.utcnow()
             }
-            
-            fs.db.document(cache_key).set(cache_entry)
-            print(f"Cached grade for assignment {assignment_id}: {cache_entry}")
+
+            fs.db.document(cache_path).set(cache_entry)
+            print(f"Cached grade for {safe_key}: {cache_entry}")
         except Exception as e:
             print(f"Error caching grade: {e}")
             import traceback
@@ -94,7 +95,7 @@ class GradeCacheService:
     def get_all_cached_grades(
         firebase_uid: str,
         course_id: int
-    ) -> Dict[int, Dict]:
+    ) -> Dict[str, Dict]:
         """
         Retrieve all cached grades for a course.
         
@@ -103,26 +104,19 @@ class GradeCacheService:
             course_id: Moodle course ID
             
         Returns:
-            Dict mapping assignment_id -> grade data
+            Dict mapping item_key (e.g. 'assign_3', 'quiz_1') -> grade data
         """
         try:
             fs = FirestoreService()
             base_path = f"{GradeCacheService.CACHE_COLLECTION}/{firebase_uid}/courses/{course_id}/assignments"
             docs = fs.db.collection(base_path).stream()
 
-            result: Dict[int, Dict] = {}
+            result: Dict[str, Dict] = {}
             for doc in docs:
                 data = doc.to_dict() or {}
-                assignment_id = data.get("assignment_id")
-                if assignment_id is None:
-                    continue
-
-                try:
-                    assignment_id_int = int(assignment_id)
-                except Exception:
-                    continue
-
-                result[assignment_id_int] = data
+                # Use the Firestore document id as the key (e.g. 'quiz_1', 'assign_3')
+                doc_key = doc.id
+                result[doc_key] = data
             
             print(f"Retrieved {len(result)} cached grades for course {course_id}")
             return result
