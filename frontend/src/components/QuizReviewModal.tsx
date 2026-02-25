@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { X, Loader2, CheckCircle2, XCircle, MinusCircle, Clock, Award } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import quizService, { AttemptReview, Quiz } from '../services/quizService';
@@ -9,6 +9,23 @@ interface QuizReviewModalProps {
   quiz: Quiz;
   attemptId: number;
 }
+
+const ReviewQuestionHtml = memo(function ReviewQuestionHtml({
+  html,
+  processHtml,
+}: {
+  html: string;
+  processHtml: (html: string) => string;
+}) {
+  const processed = useMemo(() => processHtml(html), [html, processHtml]);
+  const dangerous = useMemo(() => ({ __html: processed }), [processed]);
+  return (
+    <div
+      className="quiz-review-html text-sm leading-relaxed"
+      dangerouslySetInnerHTML={dangerous}
+    />
+  );
+});
 
 export default function QuizReviewModal({ isOpen, onClose, quiz, attemptId }: QuizReviewModalProps) {
   const [review, setReview] = useState<AttemptReview | null>(null);
@@ -116,6 +133,36 @@ export default function QuizReviewModal({ isOpen, onClose, quiz, attemptId }: Qu
     return `${m}m ${s}s`;
   };
 
+  // Strip Moodle-only navigation from review HTML.
+  // Student UI should show comments/response history but must not navigate to Moodle.
+  const processReviewHtml = useCallback((html: string): string => {
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+
+      // Remove injected scripts.
+      doc.querySelectorAll('script').forEach(s => s.remove());
+
+      // Remove the "Make comment or override mark" section entirely.
+      doc.querySelectorAll('.commentlink').forEach(el => el.remove());
+
+      // Replace all anchors with spans (prevents navigation).
+      doc.querySelectorAll('a').forEach((a) => {
+        const span = doc.createElement('span');
+        if (a.className) span.className = a.className;
+        if (a.id) span.id = a.id;
+        const title = a.getAttribute('title');
+        if (title) span.setAttribute('title', title);
+        span.textContent = a.textContent || '';
+        a.replaceWith(span);
+      });
+
+      return doc.body.innerHTML;
+    } catch {
+      return html;
+    }
+  }, []);
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -219,7 +266,7 @@ export default function QuizReviewModal({ isOpen, onClose, quiz, attemptId }: Qu
                       {overallFeedback?.content && (
                         <div
                           className="mt-4 pt-3 border-t border-[#1E5BF0]/15 text-sm text-gray-700 dark:text-gray-300"
-                          dangerouslySetInnerHTML={{ __html: overallFeedback.content }}
+                          dangerouslySetInnerHTML={{ __html: processReviewHtml(overallFeedback.content) }}
                         />
                       )}
                     </div>
@@ -266,10 +313,7 @@ export default function QuizReviewModal({ isOpen, onClose, quiz, attemptId }: Qu
 
                           {/* Question body */}
                           <div className="px-4 py-4">
-                            <div
-                              className="quiz-review-html text-sm leading-relaxed"
-                              dangerouslySetInnerHTML={{ __html: q.html }}
-                            />
+                            <ReviewQuestionHtml html={q.html} processHtml={processReviewHtml} />
                           </div>
                         </motion.div>
                       ))}
@@ -301,6 +345,32 @@ export default function QuizReviewModal({ isOpen, onClose, quiz, attemptId }: Qu
             }
             .dark .quiz-review-html {
               color: #d1d5db;
+            }
+
+            /* Moodle a11y helpers (Bootstrap isn't loaded here) */
+            .quiz-review-html .accesshide,
+            .quiz-review-html .sr-only {
+              position: absolute !important;
+              width: 1px !important;
+              height: 1px !important;
+              padding: 0 !important;
+              margin: -1px !important;
+              overflow: hidden !important;
+              clip: rect(0,0,0,0) !important;
+              white-space: nowrap !important;
+              border: 0 !important;
+            }
+
+            /* Ensure no navigation is possible from review HTML */
+            .quiz-review-html a {
+              pointer-events: none !important;
+              color: inherit;
+              text-decoration: none;
+            }
+
+            /* Comment container: keep layout tidy after stripping comment link */
+            .quiz-review-html .comment {
+              margin-top: 10px;
             }
 
             /* ── Question text ───────────────────────────────────── */
