@@ -243,10 +243,14 @@ def get_course_insights(course_id: int):
             a for a in context_dict.get('assignments', [])
             if a.get('course', '') == course_name
         ]
+        course_quizzes = [
+            q for q in context_dict.get('quizzes', [])
+            if q.get('course', '') == course_name
+        ]
         
         # Generate using OpenAI
         insights_data = _generate_course_insights(
-            target_course, course_assignments, context_dict, current_app.config
+            target_course, course_assignments, course_quizzes, context_dict, current_app.config
         )
         
         # Cache
@@ -266,7 +270,7 @@ def get_course_insights(course_id: int):
 
 
 def _generate_course_insights(
-    course: dict, assignments: list, full_context: dict, app_config: dict
+    course: dict, assignments: list, quizzes: list, full_context: dict, app_config: dict
 ) -> dict:
     """Generate AI insights for a specific course."""
     try:
@@ -310,7 +314,21 @@ def _generate_course_insights(
             else:
                 lines.append(f"- {name}: {status}, no due date set")
         assignments_text = "\n".join(lines)
-    
+
+    quizzes_text = ""
+    if quizzes:
+        q_lines = []
+        for q in quizzes:
+            qname = q.get("name", "Unknown")
+            score = q.get("score")
+            max_score = q.get("maxScore")
+            pct = q.get("percentage")
+            if score is not None and max_score is not None:
+                q_lines.append(f"- {qname}: {score}/{max_score} ({pct}%)")
+            else:
+                q_lines.append(f"- {qname}: not graded")
+        quizzes_text = "\n".join(q_lines)
+
     prompt = f"""Analyze this student's status in a specific course and provide personalized insights.
 
 STUDENT: {student_name}
@@ -321,10 +339,13 @@ AVERAGE SCORE: {avg_score if avg_score is not None else 'Not yet graded'}
 ASSIGNMENTS:
 {assignments_text if assignments_text else 'No assignments data available'}
 
+QUIZ RESULTS:
+{quizzes_text if quizzes_text else 'No quiz attempts recorded yet'}
+
 Generate a JSON response with:
 1. "insights": An array of 3-4 short, specific bullet points about the student's status in THIS course. Address the student directly with "you/your". Examples:
    - "You've completed 3/5 lab modules"
-   - "You haven't accessed Topic 3 yet"
+   - "You scored 6/10 on Quiz 1 — review the topics you missed"
    - "Try completing the next assignment before the deadline"
 2. "study_tip": A single short, actionable study tip specific to this course and the student's current progress.
 
@@ -887,6 +908,7 @@ def _generate_chat_response(
     
     # Build system prompt with student context
     assignments_text = _format_assignments_context(context.get('assignments', []))
+    quizzes_text = _format_quizzes_context(context.get('quizzes', []))
     course_content_text = _format_active_course_content(course_id)
     system_prompt = f"""You are NeoBright, a helpful AI learning assistant for university students.
 
@@ -901,6 +923,8 @@ STUDENT CONTEXT:
 {course_content_text}
 
 {assignments_text}
+
+{quizzes_text}
 
 GUIDELINES:
 - If user asks you show them their progress, Don't start with "The student's progress is..." Instead, say "Your progress is..." etc.
@@ -1109,3 +1133,25 @@ def _fallback_chat_response(user_message: str) -> str:
         "• Reach out to your instructor for specific questions\n\n"
         "Please try again later for personalized AI assistance."
     )
+
+
+def _format_quizzes_context(quizzes: list) -> str:
+    """Format quiz grades for the AI system prompt."""
+    if not quizzes:
+        return "QUIZ RESULTS:\nNo quiz attempts recorded yet."
+
+    lines = ["QUIZ RESULTS:"]
+    for q in quizzes:
+        name = q.get("name", "Unknown")
+        course = q.get("course", "")
+        score = q.get("score")
+        max_score = q.get("maxScore")
+        pct = q.get("percentage")
+        status = q.get("status", "not graded")
+
+        if score is not None and max_score is not None:
+            lines.append(f"  - {name} [{course}]: {score}/{max_score} ({pct}%) — {status}")
+        else:
+            lines.append(f"  - {name} [{course}]: {status}")
+
+    return "\n".join(lines)
