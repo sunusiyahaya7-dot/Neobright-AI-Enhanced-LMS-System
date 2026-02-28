@@ -192,14 +192,24 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
       // Check if rate limited
       if (err?.response?.status === 429) {
         setIsRateLimited(true);
-        setRateLimitCountdown(60); // Assume 60 seconds default
-        setError('Rate limit exceeded. Please wait before sending another message.');
+        // Extract wait time from backend response
+        const msg = err?.response?.data?.message || err?.response?.data?.error || '';
+        const secondsMatch = msg.match(/wait\s+(\d+)\s*seconds?/i);
+        const minutesMatch = msg.match(/wait\s+(\d+)\s*minutes?/i);
+        const countdown = secondsMatch ? parseInt(secondsMatch[1], 10)
+          : minutesMatch ? parseInt(minutesMatch[1], 10) * 60
+          : 60;
+        setRateLimitCountdown(countdown);
+        setError(msg || 'Rate limit exceeded. Please wait before sending another message.');
       } else {
         setError(errorMsg);
       }
 
       // Remove optimistic user message on error
       setMessages((prev) => prev.slice(0, -1));
+
+      // Re-throw so ChatInput knows the send failed and preserves user input
+      throw err;
     } finally {
       setSendingMessage(false);
       setProcessingFile(false);

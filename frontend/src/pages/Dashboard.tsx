@@ -327,7 +327,7 @@ export default function Dashboard() {
                   </Link>
 
                   <Link
-                    to="/Courses"
+                    to="/courses"
                     className="block p-4 bg-white dark:bg-[#1A1C20] border border-gray-200 dark:border-[#2A2D32] rounded-lg hover:border-[#1E5BF0] dark:hover:border-[#2C7CF0] transition-all"
                   >
                     <div className="flex items-start gap-3">

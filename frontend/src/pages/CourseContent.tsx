@@ -559,8 +559,9 @@ export default function CourseContent() {
                                     </div>
 
                                     {quiz.intro && (
-                                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-2 line-clamp-2"
-                                         dangerouslySetInnerHTML={{ __html: quiz.intro }} />
+                                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-2 line-clamp-2">
+                                        {quiz.intro.replace(/<[^>]*>/g, '')}
+                                      </p>
                                     )}
                                   </div>
 

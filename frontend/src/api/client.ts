@@ -31,20 +31,36 @@ api.interceptors.request.use(
 );
 
 /**
- * Response interceptor: Handle token expiration.
+ * Response interceptor: Handle token expiration and 401 errors.
  */
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
     if (error.response?.status === 401) {
       const backendError = error.response?.data?.error;
       const backendDetails = error.response?.data?.details;
-      // Helpful debug output: tells me whether the token was missing vs actually invalid.
       console.error(
         "Unauthorized:",
         backendError || "Request unauthorized",
         backendDetails ? `(details: ${backendDetails})` : ""
       );
+
+      // Try to refresh the token once before giving up
+      const user = auth.currentUser;
+      if (user && !error.config._retried) {
+        error.config._retried = true;
+        try {
+          const newToken = await user.getIdToken(true);
+          error.config.headers.Authorization = `Bearer ${newToken}`;
+          return api.request(error.config);
+        } catch {
+          // Token refresh failed — sign out and redirect
+        }
+      }
+
+      // Sign out and redirect to login
+      await auth.signOut();
+      window.location.href = '/login';
     }
     return Promise.reject(error);
   }
