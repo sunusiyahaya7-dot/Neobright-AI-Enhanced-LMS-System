@@ -1,0 +1,900 @@
+import requests
+from urllib.parse import urlparse
+from flask import current_app
+
+class MoodleService:
+    @staticmethod
+    def _safe_summary(obj):
+        """Return a small, non-PII summary of common Moodle payloads."""
+        try:
+            if isinstance(obj, dict):
+                # Grades payload
+                if "usergrades" in obj:
+                    usergrades = obj.get("usergrades") or []
+                    first = usergrades[0] if isinstance(usergrades, list) and usergrades else {}
+                    gradeitems = (first.get("gradeitems") or []) if isinstance(first, dict) else []
+                    assign_items = [i for i in gradeitems if isinstance(i, dict) and i.get("itemmodule") == "assign"]
+                    return {
+                        "type": "grades",
+                        "usergrades": len(usergrades) if isinstance(usergrades, list) else 0,
+                        "gradeitems": len(gradeitems) if isinstance(gradeitems, list) else 0,
+                        "assign_items": len(assign_items),
+                        "warnings": len(obj.get("warnings") or []),
+                        "has_exception": "exception" in obj,
+                    }
+
+                # Completion/progress payload
+                if "statuses" in obj:
+                    statuses = obj.get("statuses") or []
+                    return {
+                        "type": "completion",
+                        "statuses": len(statuses) if isinstance(statuses, list) else 0,
+                        "warnings": len(obj.get("warnings") or []),
+                        "has_exception": "exception" in obj,
+                    }
+
+                # Generic Moodle error-ish payload
+                if "exception" in obj:
+                    return {
+                        "type": "moodle_error",
+                        "exception": obj.get("exception"),
+                        "errorcode": obj.get("errorcode"),
+                    }
+
+                return {"type": "dict", "keys": list(obj.keys())[:20]}
+
+            if isinstance(obj, list):
+                return {"type": "list", "len": len(obj)}
+
+            return {"type": type(obj).__name__}
+        except Exception:
+            return {"type": "unknown"}
+    @staticmethod
+    def _get_request_headers() -> dict:
+        """Headers used for Moodle requests.
+
+        Moodle will often redirect (303) if the request Host doesn't match $CFG->wwwroot.
+        In Docker on Windows, the backend may need to reach Moodle via host.docker.internal
+        while still presenting Host: localhost:8080.
+        """
+        configured = (current_app.config.get("MOODLE_HOST_HEADER") or "").strip()
+        if configured:
+            return {"Host": configured}
+
+        public_base = (current_app.config.get("MOODLE_BASE_URL") or "").strip()
+        netloc = urlparse(public_base).netloc
+        return {"Host": netloc} if netloc else {}
+
+    @staticmethod
+    def _request(method: str, url: str, **kwargs) -> requests.Response:
+        headers = dict(kwargs.pop("headers", {}) or {})
+        headers.update(MoodleService._get_request_headers())
+
+        # Moodle redirects are almost always a config/host mismatch in our setup.
+        kwargs.setdefault("allow_redirects", False)
+
+        response = requests.request(method, url, headers=headers, **kwargs)
+        if 300 <= response.status_code < 400:
+            location = response.headers.get("Location")
+            raise RuntimeError(
+                f"Moodle returned redirect {response.status_code} to {location}. "
+                "Check MOODLE_INTERNAL_BASE_URL / MOODLE_HOST_HEADER / Moodle wwwroot."
+            )
+
+        return response
+
+    @staticmethod
+    def _build_url(wsfunction: str) -> str:
+        """
+        Build full Moodle REST URL for a given function.
+        """
+        base_url = (current_app.config.get("MOODLE_INTERNAL_BASE_URL") or current_app.config["MOODLE_BASE_URL"]).rstrip("/")
+        token = current_app.config["MOODLE_TOKEN"]
+
+        if not token:
+            raise ValueError("MOODLE_TOKEN is not set in environment")
+
+        return (
+            f"{base_url}/webservice/rest/server.php"
+            f"?wstoken={token}"
+            f"&wsfunction={wsfunction}"
+            f"&moodlewsrestformat=json"
+        )
+
+    @staticmethod
+    def get_courses():
+        """
+        Call Moodle core_course_get_courses and return parsed JSON.
+        """
+        url = MoodleService._build_url("core_course_get_courses")
+
+        response = MoodleService._request("GET", url, timeout=10)
+        response.raise_for_status()  # raises if HTTP error
+
+        data = response.json()
+
+        # If Moodle returns an 'exception', handle it
+        if isinstance(data, dict) and "exception" in data:
+            raise RuntimeError(
+                f"Moodle error: {data.get('exception')} - {data.get('message')}"
+            )
+
+        return data
+
+    @staticmethod
+    def get_user_courses(moodle_user_id: int):
+        """Fetch only the courses a specific Moodle user is enrolled in.
+
+        Uses Moodle core_enrol_get_users_courses.
+        """
+        url = MoodleService._build_url("core_enrol_get_users_courses")
+        params = {"userid": moodle_user_id}
+
+        response = MoodleService._request("GET", url, params=params, timeout=10)
+        response.raise_for_status()
+
+        data = response.json()
+
+        if isinstance(data, dict) and "exception" in data:
+            raise RuntimeError(
+                f"Moodle error: {data.get('exception')} - {data.get('message')}"
+            )
+
+        return data
+
+    @staticmethod
+    def get_course_contents(course_id: int):
+        """Fetch course contents (sections + modules + files) from Moodle."""
+        url = MoodleService._build_url("core_course_get_contents")
+        params = {"courseid": course_id}
+
+        response = MoodleService._request("GET", url, params=params, timeout=10)
+        response.raise_for_status()
+
+        data = response.json()
+
+        if isinstance(data, dict) and "exception" in data:
+            raise RuntimeError(f"Moodle error: {data.get('exception')}")
+
+        return data
+
+    @staticmethod
+    def get_users_by_field(field: str, values: list):
+        """
+        Search for Moodle users by a field (email or username).
+        Uses core_user_get_users.
+        
+        Args:
+            field: "email" or "username"
+            values: List of values to search for
+        
+        Returns:
+            List of user objects matching the search
+        """
+        url = MoodleService._build_url("core_user_get_users")
+        
+        # Build params for each value
+        params = {}
+        for idx, value in enumerate(values):
+            params[f"criteria[{idx}][key]"] = field
+            params[f"criteria[{idx}][value]"] = value
+        
+        response = MoodleService._request("GET", url, params=params, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        # Check for Moodle errors
+        if isinstance(data, dict) and "exception" in data:
+            raise RuntimeError(
+                f"Moodle error: {data.get('exception')} - {data.get('message')}"
+            )
+        
+        # core_user_get_users returns {'users': [...], 'warnings': [...]}
+        users = data.get("users", []) if isinstance(data, dict) else []
+        return users
+
+    @staticmethod
+    def get_assignment_details(course_id: int):
+        """
+        Fetch assignment details including introattachments.
+        Uses mod_assign_get_assignments.
+        """
+        url = MoodleService._build_url("mod_assign_get_assignments")
+        params = {"courseids[0]": course_id}
+
+        response = MoodleService._request("GET", url, params=params, timeout=10)
+        response.raise_for_status()
+
+        data = response.json()
+
+        if isinstance(data, dict) and "exception" in data:
+            raise RuntimeError(
+                f"Moodle error: {data.get('exception')} - {data.get('message')}"
+            )
+
+        return data
+
+    @staticmethod
+    def get_file_url(file_path: str) -> str:
+        """Build secure Moodle file URL using server-side token."""
+        base_url = (current_app.config.get("MOODLE_INTERNAL_BASE_URL") or current_app.config["MOODLE_BASE_URL"]).rstrip("/")
+        token = current_app.config["MOODLE_TOKEN"]
+        
+        if not token:
+            raise ValueError("MOODLE_TOKEN is not set in environment")
+         
+        return f"{base_url}/webservice/pluginfile.php/{file_path}?token={token}"
+
+    @staticmethod
+    def fetch_file_stream(file_url: str):
+        """Stream a file from Moodle without loading it fully into memory."""
+        response = MoodleService._request("GET", file_url, stream=True, timeout=30)
+        response.raise_for_status()
+
+        return response
+    
+    @staticmethod
+    def submit_assignment(assignment_id: int, file_data, filename: str):
+        """
+        Submit a file to a Moodle assignment.
+        
+        Process:
+        1. Upload file to Moodle draft file area
+        2. Save submission with uploaded file via mod_assign_save_submission
+        3. Submit for grading via mod_assign_submit_for_grading
+        
+        Returns submission response from Moodle or raises exception on failure.
+        """
+        try:
+            # Step 1: Upload file to draft area
+            print(f"Uploading file {filename} to Moodle draft area...")
+            upload_url = MoodleService._build_upload_url()
+            
+            # Reset file pointer to beginning in case it was read
+            if hasattr(file_data, 'seek'):
+                file_data.seek(0)
+            
+            files = {'file': (filename, file_data)}
+            upload_response = MoodleService._request("POST", upload_url, files=files, timeout=30)
+            upload_response.raise_for_status()
+            
+            upload_data = upload_response.json()
+            print(f"Upload response: {upload_data}")
+            
+            # Check if upload was successful
+            if not upload_data or len(upload_data) == 0:
+                raise ValueError("File upload failed - no response from Moodle")
+            
+            draft_item_id = upload_data[0].get('itemid')
+            if not draft_item_id:
+                raise ValueError(f"File upload failed - no itemid returned. Response: {upload_data}")
+            
+            print(f"File uploaded successfully with draft_item_id: {draft_item_id}")
+            
+            # Step 2: Save submission with uploaded file
+            print(f"Saving submission for assignment {assignment_id}...")
+            save_url = MoodleService._build_url("mod_assign_save_submission")
+            save_params = {
+                'assignmentid': assignment_id,
+                'plugindata[files_filemanager]': draft_item_id
+            }
+            
+            save_response = MoodleService._request("POST", save_url, data=save_params, timeout=10)
+            save_response.raise_for_status()
+            save_data = save_response.json()
+            
+            if isinstance(save_data, dict) and "exception" in save_data:
+                raise RuntimeError(f"Moodle error: {save_data.get('exception')} - {save_data.get('message')}")
+            
+            print(f"Submission saved: {save_data}")
+            
+            # Step 3: Submit for grading
+            print(f"Submitting for grading...")
+            submit_url = MoodleService._build_url("mod_assign_submit_for_grading")
+            submit_params = {
+                'assignmentid': assignment_id,
+                'acceptsubmissionstatement': 1
+            }
+            
+            submit_response = MoodleService._request("POST", submit_url, data=submit_params, timeout=10)
+            submit_response.raise_for_status()
+            submit_data = submit_response.json()
+            
+            if isinstance(submit_data, dict) and "exception" in submit_data:
+                raise RuntimeError(f"Moodle error: {submit_data.get('exception')} - {submit_data.get('message')}")
+            
+            print(f"Assignment submitted successfully: {submit_data}")
+            
+            # Return success response
+            return {
+                "success": True,
+                "message": "Assignment submitted successfully to Moodle",
+                "filename": filename,
+                "timestamp": MoodleService._get_timestamp(),
+                "draft_item_id": draft_item_id,
+                "moodle_response": submit_data
+            }
+        
+        except Exception as e:
+            print(f"Error submitting assignment to Moodle: {e}")
+            import traceback
+            traceback.print_exc()
+            # Still return a response so Firestore can log it, but indicate Moodle submission failed
+            return {
+                "success": False,
+                "message": f"Failed to submit to Moodle: {str(e)}",
+                "filename": filename,
+                "timestamp": MoodleService._get_timestamp(),
+                "error": str(e)
+            }
+    
+    @staticmethod
+    def _build_upload_url() -> str:
+        """Build Moodle file upload URL for draft files."""
+        base_url = (current_app.config.get("MOODLE_INTERNAL_BASE_URL") or current_app.config["MOODLE_BASE_URL"]).rstrip("/")
+        token = current_app.config["MOODLE_TOKEN"]
+        
+        if not token:
+            raise ValueError("MOODLE_TOKEN is not set in environment")
+        
+        return f"{base_url}/webservice/upload.php?token={token}"
+    
+    @staticmethod
+    def get_submission_status(assignment_id: int):
+        """
+        Fetch submission status and grading details from Moodle.
+        
+        Returns detailed submission info including:
+        - Submission status (draft, submitted, etc.)
+        - Grade (if graded)
+        - Feedback/comments from teacher
+        - Whether student can edit/delete submission
+        """
+        try:
+            print(f"Fetching submission status for assignment {assignment_id}...")
+            url = MoodleService._build_url("mod_assign_get_submission_status")
+            params = {"assignid": assignment_id}
+            
+            response = MoodleService._request("GET", url, params=params, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            print(f"Submission status response: {data}")
+            
+            # Check for Moodle errors
+            if isinstance(data, dict) and "exception" in data:
+                error_msg = f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                print(f"Error from Moodle: {error_msg}")
+                raise RuntimeError(error_msg)
+            
+            return data
+        
+        except Exception as e:
+            print(f"Error fetching submission status for assignment {assignment_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            # Return empty response instead of failing
+            return {"submission": None, "feedback": None}
+    
+    @staticmethod
+    def delete_submission(assignment_id: int):
+        """
+        Delete a student's submission from Moodle.
+        
+        Returns response from Moodle or raises exception on failure.
+        """
+        try:
+            print(f"Attempting to delete submission for assignment {assignment_id}...")
+            url = MoodleService._build_url("mod_assign_delete_submission")
+            params = {"assignmentid": assignment_id}
+            
+            response = MoodleService._request("POST", url, data=params, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            print(f"Delete response from Moodle: {data}")
+            
+            # Check for Moodle errors
+            if isinstance(data, dict) and "exception" in data:
+                raise RuntimeError(
+                    f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                )
+            
+            return {
+                "success": True,
+                "message": "Submission deleted successfully",
+                "timestamp": MoodleService._get_timestamp()
+            }
+        
+        except Exception as e:
+            print(f"Error deleting submission for assignment {assignment_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "success": False,
+                "message": f"Failed to delete submission: {str(e)}",
+                "error": str(e)
+            }
+    
+    @staticmethod
+    def get_course_progress(course_id: int, moodle_user_id: int):
+        """
+        Fetch activity completion status for a student in a course.
+        
+        Uses Moodle core_completion_get_activities_completion_status.
+        
+        Args:
+            course_id: Moodle course ID
+            moodle_user_id: Moodle user ID (student)
+        
+        Returns:
+            Dict with statuses list:
+            {
+                "statuses": [
+                    {
+                        "cmid": 12,
+                        "completed": true,
+                        "state": 1,
+                        "timecompleted": 1713452231
+                    }
+                ]
+            }
+        """
+        try:
+            print(f"Fetching progress for course {course_id}, user {moodle_user_id}...")
+            url = MoodleService._build_url(
+                "core_completion_get_activities_completion_status"
+            )
+            params = {
+                "courseid": course_id,
+                "userid": moodle_user_id
+            }
+            
+            response = MoodleService._request("GET", url, params=params, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            print(f"Progress response summary: {MoodleService._safe_summary(data)}")
+            
+            # Check for Moodle errors
+            if isinstance(data, dict) and "exception" in data:
+                error_msg = f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                print(f"Error from Moodle: {error_msg}")
+                raise RuntimeError(error_msg)
+            
+            return data
+        
+        except Exception as e:
+            print(f"Error fetching course progress for course {course_id}, user {moodle_user_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            # Return empty response instead of failing
+            return {"statuses": []}
+    
+    @staticmethod
+    def get_course_grades(course_id: int, moodle_user_id: int):
+        """
+        Fetch student grades/scores for a course.
+        
+        Uses Moodle gradereport_user_get_grade_items.
+        
+        Args:
+            course_id: Moodle course ID
+            moodle_user_id: Moodle user ID (student)
+        
+        Returns:
+            Dict with grades info and items
+        """
+        try:
+            print(f"Fetching grades for course {course_id}, user {moodle_user_id}...")
+            url = MoodleService._build_url("gradereport_user_get_grade_items")
+            params = {
+                "courseid": course_id,
+                "userid": moodle_user_id
+            }
+            
+            response = MoodleService._request("GET", url, params=params, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            print(f"Grades response summary: {MoodleService._safe_summary(data)}")
+            
+            # Check for Moodle errors
+            if isinstance(data, dict) and "exception" in data:
+                error_msg = f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                print(f"Error from Moodle: {error_msg}")
+                raise RuntimeError(error_msg)
+            
+            return data
+        
+        except Exception as e:
+            print(f"Error fetching grades for course {course_id}, user {moodle_user_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            # Return empty response instead of failing
+            return {"usergrades": []}
+    
+    @staticmethod
+    def _get_timestamp():
+        """Get current timestamp in Moodle format."""
+        from datetime import datetime
+        return int(datetime.utcnow().timestamp())
+
+    @staticmethod
+    def mark_activity_complete(moodle_user_id: int, cmid: int, is_complete: bool = True):
+        """
+        Mark an activity as complete/incomplete in Moodle.
+        
+        Uses Moodle core_completion_update_activity_completion_status_manually.
+        
+        Args:
+            moodle_user_id: Moodle user ID (student)
+            cmid: Course module ID (activity ID)
+            is_complete: Whether to mark as complete (True) or incomplete (False)
+        
+        Returns:
+            Response from Moodle (usually empty dict on success)
+        """
+        try:
+            print(f"Marking activity {cmid} as {'complete' if is_complete else 'incomplete'} for user {moodle_user_id}...")
+            
+            url = MoodleService._build_url(
+                "core_completion_update_activity_completion_status_manually"
+            )
+            params = {
+                "cmid": cmid,
+                "userid": moodle_user_id,
+                "completed": 1 if is_complete else 0
+            }
+            
+            response = MoodleService._request("POST", url, params=params, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            print(f"Mark complete response: {data}")
+            
+            # Check for Moodle errors
+            if isinstance(data, dict) and "exception" in data:
+                error_msg = f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                print(f"Error from Moodle: {error_msg}")
+                raise RuntimeError(error_msg)
+            
+            return {"success": True}
+        
+        except Exception as e:
+            print(f"Error marking activity {cmid} complete for user {moodle_user_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+
+    # ── Quiz Methods ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def get_quizzes_by_course(course_id: int):
+        """
+        Fetch all quizzes in a course.
+
+        Uses mod_quiz_get_quizzes_by_courses.
+
+        Args:
+            course_id: Moodle course ID
+
+        Returns:
+            Dict with 'quizzes' list containing quiz objects with fields like:
+            id, course, coursemodule, name, intro, timeopen, timeclose,
+            timelimit, grade, attempts, grademethod, etc.
+        """
+        try:
+            print(f"Fetching quizzes for course {course_id}...")
+            url = MoodleService._build_url("mod_quiz_get_quizzes_by_courses")
+            params = {"courseids[0]": course_id}
+
+            response = MoodleService._request("GET", url, params=params, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+            print(f"Quizzes response summary: {MoodleService._safe_summary(data)}")
+
+            if isinstance(data, dict) and "exception" in data:
+                raise RuntimeError(
+                    f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                )
+
+            return data
+
+        except Exception as e:
+            print(f"Error fetching quizzes for course {course_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"quizzes": [], "warnings": []}
+
+    @staticmethod
+    def get_quiz_user_attempts(quiz_id: int, user_id: int, status: str = "all"):
+        """
+        Fetch a user's attempts for a quiz.
+
+        Uses mod_quiz_get_user_attempts.
+
+        Args:
+            quiz_id: Moodle quiz ID
+            user_id: Moodle user ID
+            status: Filter by status – 'all', 'finished', or 'unfinished'
+
+        Returns:
+            Dict with 'attempts' list containing attempt objects with fields like:
+            id, quiz, userid, attempt, state, timestart, timefinish,
+            sumgrades, etc.
+        """
+        try:
+            print(f"Fetching attempts for quiz {quiz_id}, user {user_id}...")
+            url = MoodleService._build_url("mod_quiz_get_user_attempts")
+            params = {
+                "quizid": quiz_id,
+                "userid": user_id,
+                "status": status,
+                "includepreviews": 1,
+            }
+
+            response = MoodleService._request("GET", url, params=params, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+            print(f"Attempts response summary: {MoodleService._safe_summary(data)}")
+
+            if isinstance(data, dict) and "exception" in data:
+                raise RuntimeError(
+                    f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                )
+
+            return data
+
+        except Exception as e:
+            print(f"Error fetching attempts for quiz {quiz_id}, user {user_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"attempts": [], "warnings": []}
+
+    @staticmethod
+    def get_quiz_attempt_review(attempt_id: int, page: int = -1):
+        """
+        Fetch the review (graded results) of a finished quiz attempt.
+
+        Uses mod_quiz_get_attempt_review.
+
+        Args:
+            attempt_id: Moodle attempt ID
+            page: Page number (-1 = all pages in one response)
+
+        Returns:
+            Dict with 'questions' list containing graded question data,
+            plus 'attempt' metadata and 'grade' info.
+        """
+        try:
+            print(f"Fetching attempt review for attempt {attempt_id}...")
+            url = MoodleService._build_url("mod_quiz_get_attempt_review")
+            params = {
+                "attemptid": attempt_id,
+                "page": page,
+            }
+
+            response = MoodleService._request("GET", url, params=params, timeout=15)
+            response.raise_for_status()
+
+            data = response.json()
+            print(f"Attempt review summary: {MoodleService._safe_summary(data)}")
+
+            if isinstance(data, dict) and "exception" in data:
+                raise RuntimeError(
+                    f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                )
+
+            return data
+
+        except Exception as e:
+            print(f"Error fetching review for attempt {attempt_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"questions": [], "attempt": {}, "warnings": []}
+
+    @staticmethod
+    def get_quiz_access_info(quiz_id: int):
+        """
+        Fetch access/capability information for a quiz.
+
+        Uses mod_quiz_get_quiz_access_information.
+
+        Args:
+            quiz_id: Moodle quiz ID
+
+        Returns:
+            Dict with access info: canattempt, canmanage, canpreview,
+            canreviewmyattempts, accessrules, etc.
+        """
+        try:
+            print(f"Fetching access info for quiz {quiz_id}...")
+            url = MoodleService._build_url("mod_quiz_get_quiz_access_information")
+            params = {"quizid": quiz_id}
+
+            response = MoodleService._request("GET", url, params=params, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+
+            if isinstance(data, dict) and "exception" in data:
+                raise RuntimeError(
+                    f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                )
+
+            return data
+
+        except Exception as e:
+            print(f"Error fetching access info for quiz {quiz_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {}
+
+    @staticmethod
+    def start_quiz_attempt(quiz_id: int):
+        """
+        Start a new quiz attempt.
+
+        Uses mod_quiz_start_attempt.
+
+        Args:
+            quiz_id: Moodle quiz ID
+
+        Returns:
+            Dict with 'attempt' object (id, quiz, state, timestart, etc.)
+        """
+        try:
+            print(f"Starting quiz attempt for quiz {quiz_id}...")
+            url = MoodleService._build_url("mod_quiz_start_attempt")
+            params = {"quizid": quiz_id}
+
+            response = MoodleService._request("POST", url, data=params, timeout=15)
+            response.raise_for_status()
+
+            data = response.json()
+            print(f"Start attempt response summary: {MoodleService._safe_summary(data)}")
+
+            if isinstance(data, dict) and "exception" in data:
+                raise RuntimeError(
+                    f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                )
+
+            return data
+
+        except Exception as e:
+            print(f"Error starting attempt for quiz {quiz_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+
+    @staticmethod
+    def get_attempt_data(attempt_id: int, page: int = 0):
+        """
+        Fetch question data for an in-progress attempt (page by page).
+
+        Uses mod_quiz_get_attempt_data.
+
+        Args:
+            attempt_id: Moodle attempt ID
+            page: Page number (0-based)
+
+        Returns:
+            Dict with 'questions' list (HTML-rendered question forms),
+            'attempt' metadata, and 'nextpage' (-1 if last page).
+        """
+        try:
+            print(f"Fetching attempt data for attempt {attempt_id}, page {page}...")
+            url = MoodleService._build_url("mod_quiz_get_attempt_data")
+            params = {
+                "attemptid": attempt_id,
+                "page": page,
+            }
+
+            response = MoodleService._request("GET", url, params=params, timeout=15)
+            response.raise_for_status()
+
+            data = response.json()
+            print(f"Attempt data summary: {MoodleService._safe_summary(data)}")
+
+            if isinstance(data, dict) and "exception" in data:
+                raise RuntimeError(
+                    f"Moodle error: {data.get('exception')} - {data.get('message')}"
+                )
+
+            return data
+
+        except Exception as e:
+            print(f"Error fetching attempt data for attempt {attempt_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"questions": [], "attempt": {}, "nextpage": -1, "warnings": []}
+
+    @staticmethod
+    def save_attempt_data(attempt_id: int, data: list):
+        """
+        Save (but do not submit) answers for an in-progress quiz attempt.
+
+        Uses mod_quiz_save_attempt.
+
+        Args:
+            attempt_id: Moodle attempt ID
+            data: List of dicts with 'name' and 'value' for each answer field.
+                  e.g. [{"name": "q1:1_answer", "value": "3"}]
+
+        Returns:
+            Dict – typically {"status": true} on success.
+        """
+        try:
+            print(f"Saving attempt data for attempt {attempt_id}...")
+            url = MoodleService._build_url("mod_quiz_save_attempt")
+            params = {"attemptid": attempt_id}
+
+            # Encode the data array into Moodle's expected format
+            for idx, item in enumerate(data):
+                params[f"data[{idx}][name]"] = item["name"]
+                params[f"data[{idx}][value]"] = item["value"]
+
+            response = MoodleService._request("POST", url, data=params, timeout=15)
+            response.raise_for_status()
+
+            result = response.json()
+            print(f"Save attempt response: {result}")
+
+            if isinstance(result, dict) and "exception" in result:
+                raise RuntimeError(
+                    f"Moodle error: {result.get('exception')} - {result.get('message')}"
+                )
+
+            return result
+
+        except Exception as e:
+            print(f"Error saving attempt data for attempt {attempt_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+
+    @staticmethod
+    def submit_quiz_attempt(attempt_id: int, time_up: bool = False):
+        """
+        Submit (finish) a quiz attempt for grading.
+
+        Uses mod_quiz_process_attempt.
+
+        Args:
+            attempt_id: Moodle attempt ID
+            time_up: Whether the attempt is being auto-submitted due to time expiry
+
+        Returns:
+            Dict with 'state' (e.g. 'finished') and 'warnings'.
+        """
+        try:
+            print(f"Submitting quiz attempt {attempt_id}...")
+            url = MoodleService._build_url("mod_quiz_process_attempt")
+            params = {
+                "attemptid": attempt_id,
+                "finishattempt": 1,
+                "timeup": 1 if time_up else 0,
+            }
+
+            response = MoodleService._request("POST", url, data=params, timeout=15)
+            response.raise_for_status()
+
+            result = response.json()
+            print(f"Submit attempt response: {result}")
+
+            if isinstance(result, dict) and "exception" in result:
+                raise RuntimeError(
+                    f"Moodle error: {result.get('exception')} - {result.get('message')}"
+                )
+
+            return result
+
+        except Exception as e:
+            print(f"Error submitting attempt {attempt_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
