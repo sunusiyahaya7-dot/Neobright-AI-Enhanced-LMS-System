@@ -71,9 +71,27 @@ class AIContextService:
                 "name": student_name
             }
             
+            if not moodle_user_id:
+                print(f"User {firebase_uid} has no linked Moodle account")
+                return {
+                    "error": "Moodle account not linked",
+                    "student": student_info,
+                    "courses": [],
+                    "assignments": [],
+                    "quizzes": [],
+                    "analytics": {
+                        "overallProgress": 0,
+                        "weeklyProgress": [],
+                        "completionRate": 0,
+                        "velocityActivitiesPerWeek": 0,
+                        "riskLevel": "medium"
+                    }
+                }
+            moodle_user_id = int(moodle_user_id)
+            
             # ========== STEP 2: Get Enrolled Courses ==========
             try:
-                moodle_courses = MoodleService.get_user_courses(int(moodle_user_id))
+                moodle_courses = MoodleService.get_user_courses(moodle_user_id)
             except Exception as e:
                 print(f"Error fetching courses: {e}")
                 moodle_courses = []
@@ -101,10 +119,6 @@ class AIContextService:
                             progress_data
                         )
                         cached_progress = progress_data
-                    
-                    # Get average score, treat 0.0 as missing data
-                    avg_score = cached_progress.get("averageScore", 0)
-                    avg_score = avg_score if avg_score > 0 else None
                     
                     # Get average score, treat 0.0 as missing data (no grades released yet)
                     avg_score = cached_progress.get("averageScore", 0)

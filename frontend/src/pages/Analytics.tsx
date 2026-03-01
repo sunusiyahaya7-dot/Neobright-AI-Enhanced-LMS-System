@@ -11,7 +11,6 @@ import { getCourses, getCourseAssignments } from "../services/moodleService";
 import { progressService } from "../services/progressService";
 import Layout from "../components/Layout";
 import {
-  TrendingUp,
   Award,
   Clock,
   Target,
@@ -205,7 +204,7 @@ export default function Analytics() {
           <div className="p-6">
             <div className="max-w-7xl mx-auto">
               <Link
-                to="/Dashboard"
+                to="/"
                 className="inline-flex items-center gap-2 text-gray-600 dark:text-gray-400 hover:text-[#1E5BF0] dark:hover:text-[#2C7CF0] mb-4 transition-colors"
               >
                 <ArrowLeft size={18} />
@@ -232,10 +231,7 @@ export default function Analytics() {
                   <div className="w-8 h-8 bg-white/80 dark:bg-white/10 rounded-full flex items-center justify-center shadow-sm">
                     <Award className="text-teal-600" size={18} />
                   </div>
-                  <div className="absolute right-3 flex items-center gap-1 text-teal-600 text-sm font-semibold">
-                    <TrendingUp size={16} />
-                    <span>+5%</span>
-                  </div>
+
                 </div>
                 <div className="mt-4 flex items-end justify-between">
                   <div>
@@ -258,18 +254,14 @@ export default function Analytics() {
                   <div className="w-8 h-8 bg-white/80 dark:bg-white/10 rounded-full flex items-center justify-center shadow-sm">
                     <Clock className="text-blue-600" size={18} />
                   </div>
-                  <div className="absolute right-3 flex items-center gap-1 text-teal-600 text-sm font-semibold">
-                    <TrendingUp size={16} />
-                    <span>+3h</span>
-                  </div>
                 </div>
                 <div className="mt-4 flex items-end justify-between">
                   <div>
                     <div className="text-2xl font-bold text-gray-900 dark:text-white leading-tight">
-                      {Math.max(24, weeklyStreak * 4)}h
+                      {assignmentStats.completed}
                     </div>
                     <p className="text-sm text-gray-600 dark:text-gray-400">
-                      Study Hours
+                      Activities Done
                     </p>
                   </div>
                 </div>
@@ -284,10 +276,7 @@ export default function Analytics() {
                   <div className="w-8 h-8 bg-white/80 dark:bg-white/10 rounded-full flex items-center justify-center shadow-sm">
                     <Target className="text-blue-600" size={18} />
                   </div>
-                  <div className="absolute right-3 flex items-center gap-1 text-teal-600 text-sm font-semibold">
-                    <TrendingUp size={16} />
-                    <span>+12%</span>
-                  </div>
+
                 </div>
                 <div className="mt-4 flex items-end justify-between">
                   <div>
@@ -310,10 +299,7 @@ export default function Analytics() {
                   <div className="w-8 h-8 bg-white/80 dark:bg-white/10 rounded-full flex items-center justify-center shadow-sm">
                     <Zap className="text-orange-600" size={18} />
                   </div>
-                  <div className="absolute right-3 flex items-center gap-1 text-teal-600 text-sm font-semibold">
-                    <TrendingUp size={16} />
-                    <span>+2</span>
-                  </div>
+
                 </div>
                 <div className="mt-4 flex items-end justify-between">
                   <div>
@@ -467,7 +453,7 @@ export default function Analytics() {
                                 cy="50"
                                 r="45"
                                 fill="none"
-                                stroke="url(#gradient)"
+                                stroke={`url(#gradient-${course.id})`}
                                 strokeWidth="8"
                                 strokeDasharray={`${(percentage / 100) * 283} 283`}
                                 strokeLinecap="round"
@@ -475,7 +461,7 @@ export default function Analytics() {
                               />
                               <defs>
                                 <linearGradient
-                                  id="gradient"
+                                  id={`gradient-${course.id}`}
                                   x1="0%"
                                   y1="0%"
                                   x2="100%"

@@ -222,8 +222,9 @@ class FirestoreService:
     
     # ==================== ENROLLMENTS ====================
     
-    def create_enrollment(self, user_id: str, moodle_course_id: int, enrollment_data: Dict) -> str:
+    def create_enrollment(self, user_id: str, moodle_course_id: int, enrollment_data: Dict = None) -> str:
         """Create course enrollment record."""
+        enrollment_data = enrollment_data or {}
         enrollment_id = f"{user_id}_{moodle_course_id}"
         data = {
             **enrollment_data,
@@ -242,6 +243,22 @@ class FirestoreService:
             data['completed_sections'] = firestore.ArrayUnion([completed_section])
         
         self.db.collection('enrollments').document(enrollment_id).update(data)
+    
+    def update_enrollment_progress(self, enrollment_id: str, progress: float, completed_section: int = None) -> None:
+        """Update enrollment progress."""
+        data = {'progress': progress, 'updated_at': datetime.utcnow()}
+        if completed_section is not None:
+            data['completed_sections'] = firestore.ArrayUnion([completed_section])
+        self.db.collection('enrollments').document(enrollment_id).update(data)
+    
+    def get_user_enrollments(self, user_id: str) -> List[Dict]:
+        """Get all enrollments for a user."""
+        docs = (
+            self.db.collection('enrollments')
+            .where(filter=FieldFilter('user_id', '==', user_id))
+            .stream()
+        )
+        return [doc.to_dict() for doc in docs]
     
     def get_enrollment(self, user_id: str, moodle_course_id: int) -> Optional[Dict]:
         """Get specific enrollment."""

@@ -118,13 +118,17 @@ class ProgressService:
                 usergrades = grades_data.get("usergrades", [])
                 
                 if usergrades and len(usergrades) > 0:
-                    # Calculate average from grade items
+                    # Moodle returns: usergrades[0].gradeitems[].graderaw
+                    gradeitems = usergrades[0].get("gradeitems", []) if isinstance(usergrades[0], dict) else []
                     grades = []
-                    for item in usergrades:
-                        if isinstance(item, dict):
-                            grade_value = item.get("gradevalue")
+                    for grade_item in gradeitems:
+                        if isinstance(grade_item, dict):
+                            grade_value = grade_item.get("graderaw")
                             if grade_value is not None:
-                                grades.append(float(grade_value))
+                                try:
+                                    grades.append(float(grade_value))
+                                except (TypeError, ValueError):
+                                    pass
                     
                     if grades:
                         average_score = round(sum(grades) / len(grades), 2)

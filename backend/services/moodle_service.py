@@ -356,7 +356,7 @@ class MoodleService:
             url = MoodleService._build_url("mod_assign_get_submission_status")
             params = {"assignid": assignment_id}
             
-            response = requests.get(url, params=params, timeout=10)
+            response = MoodleService._request("GET", url, params=params, timeout=10)
             response.raise_for_status()
             
             data = response.json()
@@ -389,7 +389,7 @@ class MoodleService:
             url = MoodleService._build_url("mod_assign_delete_submission")
             params = {"assignmentid": assignment_id}
             
-            response = requests.post(url, data=params, timeout=10)
+            response = MoodleService._request("POST", url, data=params, timeout=10)
             response.raise_for_status()
             
             data = response.json()
