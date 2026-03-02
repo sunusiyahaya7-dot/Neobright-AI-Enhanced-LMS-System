@@ -1,16 +1,20 @@
 """
 AI Chat Service for NeoBright LMS.
 
-Extracted from ai_routes.py to isolate the chat LLM logic
-into a testable, replaceable service.  Phase 1 (Agent SDK)
-will swap the internals of `generate_chat_response` while
-keeping the same public signature.
+Phase 0 — extracted from ai_routes.py.
+Phase 1 — powered by the OpenAI Agents SDK.
+
+The public function `generate_chat_response` builds a per-
+request Tutor Agent, feeds it the conversation history via
+`Runner.run_sync()`, and returns the plain-text reply.
 """
 import logging
 import time
 from datetime import datetime, timezone
 
-from services.openai_client import get_openai_client
+from agents import Runner
+
+from services.agents.tutor_agent import create_tutor_agent
 from services.moodle_service import MoodleService
 from services.ai_logging_service import AiLoggingService
 
@@ -45,43 +49,49 @@ def generate_chat_response(
     start_time = time.time()
     model = app_config.get("AI_MODEL", "gpt-4o-mini")
 
-    client = get_openai_client(app_config.get("OPENAI_API_KEY"))
-    if client is None:
+    # Gate: no API key → immediate fallback
+    if not app_config.get("OPENAI_API_KEY"):
+        logger.warning("OPENAI_API_KEY not set — returning fallback")
         return _fallback_chat_response(user_message)
 
-    # Build system prompt
+    # ── Build per-request agent ────────────────────────────
     system_prompt = _build_chat_system_prompt(context, course_id, app_config)
 
-    # Assemble messages
-    messages = [{"role": "system", "content": system_prompt}]
+    agent = create_tutor_agent(
+        instructions=system_prompt,
+        model=model,
+        temperature=app_config.get("AI_TEMPERATURE", 0.6),
+        max_tokens=app_config.get("AI_MAX_TOKENS", 2000),
+    )
+
+    # ── Assemble conversation input ───────────────────────
+    input_items: list[dict] = []
     for msg in conversation_history:
-        messages.append({
+        input_items.append({
             "role": msg.get("role", "user"),
             "content": msg.get("content", ""),
         })
     if not conversation_history or conversation_history[-1].get("content") != user_message:
-        messages.append({"role": "user", "content": user_message})
+        input_items.append({"role": "user", "content": user_message})
 
+    # ── Run the agent ─────────────────────────────────────
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=app_config.get("AI_TEMPERATURE", 0.6),
-            max_tokens=app_config.get("AI_MAX_TOKENS", 2000),
-        )
+        result = Runner.run_sync(agent, input=input_items)
+        reply = result.final_output
 
-        reply = response.choices[0].message.content
+        if not reply:
+            return _fallback_chat_response(user_message)
 
-        # Log successful call
-        if user_id:
-            usage = response.usage
+        # Extract token usage from SDK raw responses
+        if user_id and result.raw_responses:
+            usage = result.raw_responses[-1].usage
             AiLoggingService.log_ai_call(
                 user_id=user_id,
                 endpoint="/api/ai/chat",
                 model=model,
                 success=True,
-                prompt_tokens=usage.prompt_tokens if usage else None,
-                completion_tokens=usage.completion_tokens if usage else None,
+                prompt_tokens=usage.input_tokens if usage else None,
+                completion_tokens=usage.output_tokens if usage else None,
                 total_tokens=usage.total_tokens if usage else None,
                 response_time_ms=(time.time() - start_time) * 1000,
             )
@@ -89,7 +99,7 @@ def generate_chat_response(
         return reply
 
     except Exception as e:
-        logger.error("OpenAI chat error: %s", e)
+        logger.error("Agent chat error: %s", e)
         if user_id:
             AiLoggingService.log_ai_call(
                 user_id=user_id,
@@ -272,13 +282,13 @@ def _format_assignments_context(assignments: list) -> str:
 
         if status == "submitted":
             has_submitted = True
-            submitted_lines.append(f"  ✅ {name} [{course}] — Due: {due_str} — SUBMITTED")
+            submitted_lines.append(f" {name} [{course}] — Due: {due_str} — SUBMITTED")
         else:
             has_pending = True
             if duedate_ts and days_diff < 0:
-                pending_lines.append(f"  ⚠️ {name} [{course}] — Due: {due_str} {time_label} — OVERDUE, NOT SUBMITTED")
+                pending_lines.append(f"  {name} [{course}] — Due: {due_str} {time_label} — OVERDUE, NOT SUBMITTED")
             else:
-                pending_lines.append(f"  📌 {name} [{course}] — Due: {due_str} {time_label}")
+                pending_lines.append(f"  {name} [{course}] — Due: {due_str} {time_label}")
 
     result_lines = []
     if has_pending:
