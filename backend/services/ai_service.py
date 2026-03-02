@@ -27,10 +27,7 @@ from models.ai_models import (
     OverallAnalytics,
 )
 
-try:
-    from openai import OpenAI
-except ImportError:
-    OpenAI = None
+from services.openai_client import get_openai_client
 
 
 # ============================================================================
@@ -151,39 +148,24 @@ INSTRUCTIONS:
         start_time = time.time()
         model_name = app_config.get("AI_MODEL", "gpt-4o-mini")
         
-        # Check if AI is configured
-        if not app_config.get("OPENAI_API_KEY"):
-            AiService.logger.warning(
-                "OPENAI_API_KEY not configured - using fallback insights"
-            )
-            if user_id:
-                AiLoggingService.log_ai_call(
-                    user_id=user_id,
-                    endpoint="/api/ai/insights",
-                    model="fallback",
-                    success=True,
-                    error_message="No API key configured"
-                )
-            return AiService.fallback_insights(context)
-
-        if not OpenAI:
-            AiService.logger.error("openai module not installed - using fallback")
-            if user_id:
-                AiLoggingService.log_ai_call(
-                    user_id=user_id,
-                    endpoint="/api/ai/insights",
-                    model="fallback",
-                    success=True,
-                    error_message="OpenAI module not installed"
-                )
-            return AiService.fallback_insights(context)
-
+        # Check if AI is configured — get_openai_client handles missing key
         try:
             # Build prompt from context
             user_prompt = AiService.build_prompt(context)
 
-            # Initialize OpenAI client
-            client = OpenAI(api_key=app_config["OPENAI_API_KEY"])
+            # Get shared OpenAI client
+            client = get_openai_client(app_config.get("OPENAI_API_KEY"))
+            if client is None:
+                AiService.logger.error("OpenAI client unavailable - using fallback")
+                if user_id:
+                    AiLoggingService.log_ai_call(
+                        user_id=user_id,
+                        endpoint="/api/ai/insights",
+                        model="fallback",
+                        success=True,
+                        error_message="OpenAI client unavailable"
+                    )
+                return AiService.fallback_insights(context)
 
             # Call OpenAI API
             response = client.chat.completions.create(
