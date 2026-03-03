@@ -221,6 +221,17 @@ TOOL USE:
   • **search_course_content** — call when the student asks about topics, lectures, or
     materials in a course (especially if it is not the active course shown above).
 - For simple questions answerable from the STUDENT CONTEXT above, do NOT call tools — just reply directly.
+
+HANDOFFS:
+- You can hand off to specialized agents when the student's request matches their expertise:
+  • **NeoBright Quiz Master** — hand off when the student asks to be quizzed, tested,
+    or wants practice questions generated (e.g. "quiz me", "test me on chapter 3",
+    "give me practice questions"). Do NOT try to create quizzes yourself.
+  • **NeoBright Study Advisor** — hand off when the student asks for a study plan,
+    study schedule, course-prioritization advice, or academic planning
+    (e.g. "make me a study plan", "how should I prepare for finals",
+    "what should I focus on this week").
+- For general questions, explanations, or simple progress checks, answer directly — do NOT hand off.
 """
 
 
