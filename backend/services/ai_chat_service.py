@@ -12,11 +12,14 @@ import logging
 import time
 from datetime import datetime, timezone
 
+from flask import current_app
 from agents import Runner
 
 from services.agents.tutor_agent import create_tutor_agent
+from services.agents.tools import TutorContext
 from services.moodle_service import MoodleService
 from services.ai_logging_service import AiLoggingService
+from services.firestore_service import FirestoreService
 
 logger = logging.getLogger(__name__)
 
@@ -74,9 +77,28 @@ def generate_chat_response(
     if not conversation_history or conversation_history[-1].get("content") != user_message:
         input_items.append({"role": "user", "content": user_message})
 
+    # ── Build per-request context for tools ─────────────
+    moodle_user_id = None
+    if user_id:
+        try:
+            user_doc = FirestoreService().get_user(user_id)
+            if user_doc:
+                moodle_user_id = user_doc.get("moodle_user_id") or user_doc.get("moodleUserId")
+                if moodle_user_id is not None:
+                    moodle_user_id = int(moodle_user_id)
+        except Exception:
+            logger.debug("Could not resolve moodle_user_id for tools")
+
+    tutor_ctx = TutorContext(
+        firebase_uid=user_id or "",
+        moodle_user_id=moodle_user_id,
+        enrolled_courses=context.get("courses", []),
+        app=current_app._get_current_object(),
+    )
+
     # ── Run the agent ─────────────────────────────────────
     try:
-        result = Runner.run_sync(agent, input=input_items)
+        result = Runner.run_sync(agent, input=input_items, context=tutor_ctx)
         reply = result.final_output
 
         if not reply:
@@ -188,6 +210,17 @@ SUMMARIZATION & TOPIC EXPLANATION GUIDELINES:
 - Always prioritize the student's learning and well-being
 - Current date: {datetime.utcnow().date().isoformat()}
 - Respond to the user's messages based on this context and the conversation history.
+
+TOOL USE:
+- You have tools that can fetch LIVE data from the student's learning platform.
+  Use them when the context above is insufficient:
+  • **get_grade_details** — call when the student asks for individual quiz/assignment scores
+    or a detailed grade breakdown for a specific course.
+  • **get_assignment_details** — call when the student asks what an assignment is about,
+    its requirements, or its full description.
+  • **search_course_content** — call when the student asks about topics, lectures, or
+    materials in a course (especially if it is not the active course shown above).
+- For simple questions answerable from the STUDENT CONTEXT above, do NOT call tools — just reply directly.
 """
 
 

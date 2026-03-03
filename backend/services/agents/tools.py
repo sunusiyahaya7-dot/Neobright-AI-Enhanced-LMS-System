@@ -1,0 +1,226 @@
+"""
+Agent tools — Phase 2: giving the Tutor Agent live Moodle access.
+
+Each ``@function_tool`` receives a ``RunContextWrapper[TutorContext]``
+as its first argument so it can access per-request student data and
+the Flask app (for MoodleService calls that need ``current_app``).
+
+Design:
+  • Tools return **plain-text summaries** (not raw JSON) because the
+    LLM will weave the answer into a natural reply.
+  • Each tool is guarded with ``try/except`` → returns a user-friendly
+    error string on failure so the agent can still respond.
+  • Flask app context is pushed inside each tool via
+    ``ctx.context.app.app_context()`` because ``Runner.run_sync``
+    may execute tool functions in a different thread.
+"""
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
+
+from agents import function_tool, RunContextWrapper
+
+logger = logging.getLogger(__name__)
+
+
+# ───────────────── per-request context ─────────────────────
+
+@dataclass
+class TutorContext:
+    """Immutable bag of per-request student data carried into tools."""
+
+    firebase_uid: str
+    moodle_user_id: int | None
+    enrolled_courses: list[dict] = field(default_factory=list)
+    app: Any = None  # Flask app instance (for pushing app context)
+
+
+# ───────────────── helpers ─────────────────────────────────
+
+def _strip_html(html: str) -> str:
+    """Remove HTML tags and collapse whitespace."""
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _find_course(enrolled: list[dict], name: str) -> dict | None:
+    """Fuzzy-match a course by name (case-insensitive substring)."""
+    name_lower = name.lower()
+    for c in enrolled:
+        full = (c.get("name") or "").lower()
+        short = (c.get("id") or "").lower()  # shortname
+        if name_lower in full or name_lower in short:
+            return c
+    return None
+
+
+# ───────────────── tool: grade details ─────────────────────
+
+@function_tool
+def get_grade_details(
+    ctx: RunContextWrapper[TutorContext],
+    course_name: str,
+) -> str:
+    """Look up detailed per-item grades for a specific course.
+
+    Call this when the student asks about individual quiz scores,
+    assignment marks, or a full grade breakdown — the system prompt
+    only has the overall average.
+
+    Args:
+        course_name: Full or partial course name.
+    """
+    tc = ctx.context
+    if not tc.moodle_user_id:
+        return "Cannot look up grades — Moodle account not linked."
+
+    course = _find_course(tc.enrolled_courses, course_name)
+    if not course:
+        return f"No enrolled course matching '{course_name}' found."
+
+    course_id = course.get("moodle_id") or course.get("id")
+
+    try:
+        with tc.app.app_context():
+            from services.moodle_service import MoodleService
+
+            data = MoodleService.get_course_grades(int(course_id), tc.moodle_user_id)
+
+        usergrades = data.get("usergrades", [])
+        if not usergrades:
+            return f"No grades available yet for {course.get('name')}."
+
+        items = usergrades[0].get("gradeitems", [])
+        if not items:
+            return f"No graded items found in {course.get('name')}."
+
+        lines = [f"Grade details for {course.get('name')}:\n"]
+        for item in items:
+            name = item.get("itemname") or "Course Total"
+            raw = item.get("graderaw")
+            gmax = item.get("grademax")
+            pct = item.get("percentageformatted", "")
+
+            if raw is not None and gmax:
+                lines.append(f"  • {name}: {raw:.1f}/{gmax:.0f} ({pct})")
+            else:
+                lines.append(f"  • {name}: not yet graded")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        logger.error("get_grade_details error: %s", e)
+        return f"Could not retrieve grades for '{course_name}': {e}"
+
+
+# ───────────────── tool: assignment details ────────────────
+
+@function_tool
+def get_assignment_details(
+    ctx: RunContextWrapper[TutorContext],
+    assignment_name: str,
+) -> str:
+    """Look up the full description and instructions for a specific assignment.
+
+    Call this when the student asks what an assignment is about, what
+    the requirements are, or needs the assignment instructions.
+
+    Args:
+        assignment_name: Full or partial assignment name.
+    """
+    tc = ctx.context
+    name_lower = assignment_name.lower()
+
+    try:
+        with tc.app.app_context():
+            from services.moodle_service import MoodleService
+
+            for course in tc.enrolled_courses:
+                course_id = course.get("moodle_id") or course.get("id")
+                data = MoodleService.get_assignment_details(int(course_id))
+
+                for c in data.get("courses", []):
+                    for assign in c.get("assignments", []):
+                        if name_lower in (assign.get("name") or "").lower():
+                            name = assign.get("name", "Unknown")
+                            intro = _strip_html(assign.get("intro") or "No description provided.")
+                            duedate = assign.get("duedate", 0)
+                            due_str = (
+                                datetime.utcfromtimestamp(duedate).strftime("%B %d, %Y at %I:%M %p")
+                                if duedate
+                                else "No due date"
+                            )
+
+                            return (
+                                f"Assignment: {name}\n"
+                                f"Course: {course.get('name')}\n"
+                                f"Due: {due_str}\n\n"
+                                f"Description:\n{intro}"
+                            )
+
+        return f"No assignment matching '{assignment_name}' found in your enrolled courses."
+
+    except Exception as e:
+        logger.error("get_assignment_details error: %s", e)
+        return f"Could not retrieve details for '{assignment_name}': {e}"
+
+
+# ───────────────── tool: course content search ─────────────
+
+@function_tool
+def search_course_content(
+    ctx: RunContextWrapper[TutorContext],
+    course_name: str,
+) -> str:
+    """Fetch the full content structure (sections and modules) for a course.
+
+    Call this when the student asks about topics, lectures, or materials
+    in a course that is NOT the active one, or when more detail is needed
+    than what is already in the system prompt.
+
+    Args:
+        course_name: Full or partial course name.
+    """
+    tc = ctx.context
+    course = _find_course(tc.enrolled_courses, course_name)
+    if not course:
+        return f"No enrolled course matching '{course_name}' found."
+
+    course_id = course.get("moodle_id") or course.get("id")
+
+    try:
+        with tc.app.app_context():
+            from services.moodle_service import MoodleService
+
+            contents = MoodleService.get_course_contents(int(course_id))
+
+        if not contents:
+            return f"No content found for {course.get('name')}."
+
+        lines = [f"Content structure for {course.get('name')}:\n"]
+        for section in contents:
+            section_name = section.get("name", "Unnamed Section")
+            modules = section.get("modules", [])
+            if not modules:
+                continue
+
+            lines.append(f"\n  Section: {section_name}")
+            for mod in modules:
+                mod_name = mod.get("name", "Unnamed")
+                mod_type = mod.get("modname", "resource")
+                desc = _strip_html(mod.get("description") or "")[:150]
+                line = f"    - [{mod_type}] {mod_name}"
+                if desc:
+                    line += f" — {desc}"
+                lines.append(line)
+
+        return "\n".join(lines) if len(lines) > 1 else f"No modules found in {course.get('name')}."
+
+    except Exception as e:
+        logger.error("search_course_content error: %s", e)
+        return f"Could not retrieve content for '{course_name}': {e}"
