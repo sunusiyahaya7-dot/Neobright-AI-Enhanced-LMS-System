@@ -224,3 +224,232 @@ def search_course_content(
     except Exception as e:
         logger.error("search_course_content error: %s", e)
         return f"Could not retrieve content for '{course_name}': {e}"
+
+
+# ───────────────── tool: course activities status ──────────
+
+@function_tool
+def get_course_activities_status(
+    ctx: RunContextWrapper[TutorContext],
+    course_name: str,
+) -> str:
+    """List all activities in a course with their completion status.
+
+    Call this when the student asks what they have or haven't completed,
+    or before marking an activity as done (to resolve the correct cmid).
+
+    Args:
+        course_name: Full or partial course name.
+    """
+    tc = ctx.context
+    if not tc.moodle_user_id:
+        return "Cannot check progress — Moodle account not linked."
+
+    course = _find_course(tc.enrolled_courses, course_name)
+    if not course:
+        return f"No enrolled course matching '{course_name}' found."
+
+    course_id = int(course.get("moodle_id") or course.get("id"))
+
+    try:
+        with tc.app.app_context():
+            from services.moodle_service import MoodleService
+
+            contents = MoodleService.get_course_contents(course_id)
+            progress = MoodleService.get_course_progress(course_id, tc.moodle_user_id)
+
+        # Build cmid → completion lookup
+        statuses = progress.get("statuses", [])
+        done_map: dict[int, bool] = {}
+        for s in statuses:
+            cmid = s.get("cmid")
+            if cmid is not None:
+                done_map[cmid] = s.get("state", 0) >= 1
+
+        if not contents:
+            return f"No content found for {course.get('name')}."
+
+        lines = [f"Activities for {course.get('name')}:\n"]
+        total = 0
+        completed = 0
+        for section in contents:
+            section_name = section.get("name", "Unnamed Section")
+            modules = section.get("modules", [])
+            if not modules:
+                continue
+            lines.append(f"\n  Section: {section_name}")
+            for mod in modules:
+                mod_name = mod.get("name", "Unnamed")
+                cmid = mod.get("id")
+                is_done = done_map.get(cmid, False)
+                status = " Done" if is_done else "Not done"
+                lines.append(f"    - {status} | {mod_name} (cmid={cmid})")
+                total += 1
+                if is_done:
+                    completed += 1
+
+        lines.insert(1, f"  Progress: {completed}/{total} activities completed")
+        return "\n".join(lines) if total > 0 else f"No trackable activities in {course.get('name')}."
+
+    except Exception as e:
+        logger.error("get_course_activities_status error: %s", e)
+        return f"Could not retrieve activity status for '{course_name}': {e}"
+
+
+# ───────────────── tool: mark activity done (ACTION) ───────
+
+@function_tool
+def mark_activity_done(
+    ctx: RunContextWrapper[TutorContext],
+    course_name: str,
+    activity_name: str,
+) -> str:
+    """Mark a specific activity as complete in the student's Moodle account.
+
+    THIS IS A WRITE ACTION — it changes the student's completion record.
+    Only call this when the student explicitly asks to mark something as done
+    (e.g. "mark Lab 2 as done", "I finished the Chapter 3 lecture").
+
+    Steps: resolve the course → find the cmid by matching the activity
+    name → call MoodleService.mark_activity_complete.
+
+    Args:
+        course_name:  Full or partial course name.
+        activity_name: Full or partial activity/module name.
+    """
+    tc = ctx.context
+    if not tc.moodle_user_id:
+        return "Cannot mark activity — Moodle account not linked."
+
+    course = _find_course(tc.enrolled_courses, course_name)
+    if not course:
+        return f"No enrolled course matching '{course_name}' found."
+
+    course_id = int(course.get("moodle_id") or course.get("id"))
+    name_lower = activity_name.lower()
+
+    try:
+        with tc.app.app_context():
+            from services.moodle_service import MoodleService
+
+            contents = MoodleService.get_course_contents(course_id)
+
+            # Find the module (cmid) by name
+            matched_mod = None
+            for section in (contents or []):
+                for mod in section.get("modules", []):
+                    if name_lower in (mod.get("name") or "").lower():
+                        matched_mod = mod
+                        break
+                if matched_mod:
+                    break
+
+            if not matched_mod:
+                return (
+                    f"No activity matching '{activity_name}' found in "
+                    f"{course.get('name')}. Use get_course_activities_status "
+                    f"to see the full list."
+                )
+
+            cmid = matched_mod["id"]
+            mod_name = matched_mod.get("name", activity_name)
+
+            # Perform the write
+            MoodleService.mark_activity_complete(tc.moodle_user_id, cmid, True)
+
+            # Also record in Firestore for the frontend
+            from services.progress_service import ProgressService
+            ProgressService.mark_activity_complete(tc.firebase_uid, course_id, cmid)
+
+        return (
+            f"Marked '{mod_name}' as complete in {course.get('name')}. "
+            f"Your progress has been updated."
+        )
+
+    except Exception as e:
+        logger.error("mark_activity_done error: %s", e)
+        return f"Could not mark '{activity_name}' as done: {e}"
+
+
+# ───────────────── tool: quiz attempts ─────────────────────
+
+@function_tool
+def get_quiz_attempts(
+    ctx: RunContextWrapper[TutorContext],
+    course_name: str,
+) -> str:
+    """Fetch the student's quiz attempt history and scores for a course.
+
+    Call this when the student asks about their quiz results,
+    past attempts, or wants to review quiz performance.
+
+    Args:
+        course_name: Full or partial course name.
+    """
+    tc = ctx.context
+    if not tc.moodle_user_id:
+        return "Cannot look up quiz attempts — Moodle account not linked."
+
+    course = _find_course(tc.enrolled_courses, course_name)
+    if not course:
+        return f"No enrolled course matching '{course_name}' found."
+
+    course_id = int(course.get("moodle_id") or course.get("id"))
+
+    try:
+        with tc.app.app_context():
+            from services.moodle_service import MoodleService
+
+            quizzes = MoodleService.get_quizzes_by_course(course_id)
+
+        quiz_list = quizzes.get("quizzes", [])
+        if not quiz_list:
+            return f"No quizzes found in {course.get('name')}."
+
+        lines = [f"Quiz attempts for {course.get('name')}:\n"]
+
+        for quiz in quiz_list:
+            quiz_id = quiz.get("id")
+            quiz_name = quiz.get("name", "Unknown Quiz")
+
+            with tc.app.app_context():
+                from services.moodle_service import MoodleService as MS
+                attempts_data = MS.get_quiz_user_attempts(quiz_id, tc.moodle_user_id)
+
+            attempts = attempts_data.get("attempts", [])
+            if not attempts:
+                lines.append(f"  📝 {quiz_name}: No attempts yet")
+                continue
+
+            for att in attempts:
+                att_num = att.get("attempt", "?")
+                state = att.get("state", "unknown")
+                grade = att.get("sumgrades")
+                timestart = att.get("timestart", 0)
+                timefinish = att.get("timefinish", 0)
+
+                started = (
+                    datetime.fromtimestamp(timestart, tz=timezone.utc).strftime("%b %d %H:%M")
+                    if timestart else "?"
+                )
+                duration = ""
+                if timestart and timefinish:
+                    mins = (timefinish - timestart) // 60
+                    duration = f" ({mins} min)"
+
+                if grade is not None:
+                    lines.append(
+                        f"  📝 {quiz_name} — Attempt {att_num}: "
+                        f"{grade} pts | {state}{duration} | {started}"
+                    )
+                else:
+                    lines.append(
+                        f"  📝 {quiz_name} — Attempt {att_num}: "
+                        f"{state}{duration} | {started}"
+                    )
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        logger.error("get_quiz_attempts error: %s", e)
+        return f"Could not retrieve quiz attempts for '{course_name}': {e}"
