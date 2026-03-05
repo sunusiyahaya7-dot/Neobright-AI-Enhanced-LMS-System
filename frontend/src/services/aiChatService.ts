@@ -91,6 +91,78 @@ export const aiChatService = {
   },
 
   /**
+   * Send a message and stream the AI response via SSE.
+   * Calls onDelta for each text chunk and onDone with the full reply.
+   * Falls back to sendMessage() on error.
+   */
+  async sendMessageStream(
+    chatId: string,
+    message: string,
+    callbacks: {
+      onDelta: (text: string) => void;
+      onDone: (fullText: string) => void;
+      onError: (err: Error) => void;
+    },
+  ): Promise<void> {
+    const { auth: firebaseAuth } = await import('../firebase');
+    const token = await firebaseAuth.currentUser?.getIdToken();
+    const baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+
+    const response = await fetch(`${baseURL}/ai/chats/${chatId}/messages/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ message }),
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error || errData.message || `Stream failed (${response.status})`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('ReadableStream not supported');
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';  // keep incomplete line
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data: ')) continue;
+
+          try {
+            const payload = JSON.parse(trimmed.slice(6));
+            if (payload.type === 'delta') {
+              callbacks.onDelta(payload.content);
+            } else if (payload.type === 'done') {
+              callbacks.onDone(payload.content);
+            } else if (payload.type === 'error') {
+              callbacks.onError(new Error(payload.content));
+            }
+          } catch {
+            // skip malformed JSON lines
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  },
+
+  /**
    * Delete a chat session
    */
   async deleteChat(chatId: string): Promise<void> {

@@ -175,17 +175,84 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
         setProcessingFile(true);
       }
 
-      // Send to backend with file if provided
-      const response = await aiChatService.sendMessage(chatSession.chatId, userMessage, file);
+      // ── Streaming path (text-only, no file) ──────────
+      if (!file) {
+        // Add a placeholder assistant message that will be filled token-by-token
+        const streamingMsg: IChatMessage = {
+          role: 'assistant',
+          content: '',
+          timestamp: new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, streamingMsg]);
 
-      setProcessingFile(false);
+        try {
+          await aiChatService.sendMessageStream(chatSession.chatId, userMessage, {
+            onDelta: (delta) => {
+              setMessages((prev) => {
+                const updated = [...prev];
+                const last = updated[updated.length - 1];
+                if (last && last.role === 'assistant') {
+                  updated[updated.length - 1] = { ...last, content: last.content + delta };
+                }
+                return updated;
+              });
+            },
+            onDone: (fullText) => {
+              setMessages((prev) => {
+                const updated = [...prev];
+                const last = updated[updated.length - 1];
+                if (last && last.role === 'assistant') {
+                  updated[updated.length - 1] = {
+                    ...last,
+                    content: fullText,
+                    timestamp: new Date().toISOString(),
+                  };
+                }
+                return updated;
+              });
+            },
+            onError: (err) => {
+              setError(err.message || 'Streaming failed');
+              // Remove the empty assistant placeholder
+              setMessages((prev) => {
+                const updated = [...prev];
+                if (updated[updated.length - 1]?.role === 'assistant' && !updated[updated.length - 1]?.content) {
+                  return updated.slice(0, -1);
+                }
+                return updated;
+              });
+            },
+          });
+        } catch (streamErr: any) {
+          // Streaming failed — fall back to sync endpoint
+          console.warn('Stream failed, falling back to sync:', streamErr.message);
+          // Remove the empty assistant placeholder
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last?.role === 'assistant' && !last.content) return prev.slice(0, -1);
+            return prev;
+          });
 
-      // Replace optimistic user msg with backend response (has file metadata), add AI response
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        response.userMessage,
-        response.assistantMessage
-      ]);
+          const response = await aiChatService.sendMessage(chatSession.chatId, userMessage);
+          setMessages((prev) => {
+            // Replace user msg with backend version and add assistant msg
+            const withoutLastUser = prev.slice(0, -1);
+            return [...withoutLastUser, response.userMessage, response.assistantMessage];
+          });
+        }
+      } else {
+        // ── File upload path (non-streaming) ─────────
+        const response = await aiChatService.sendMessage(chatSession.chatId, userMessage, file);
+
+        setProcessingFile(false);
+
+        // Replace optimistic user msg with backend response (has file metadata), add AI response
+        setMessages((prev) => [
+          ...prev.slice(0, -1),
+          response.userMessage,
+          response.assistantMessage
+        ]);
+      }
     } catch (err: any) {
       const errorMsg = err?.response?.data?.message || err.message || 'Failed to send message';
 
@@ -358,14 +425,15 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
                   />
                 );
               })}
-              {/* Thinking indicator while AI is generating response */}
-              {(sendingMessage || processingFile) && (
+              {/* Thinking indicator — show only for file processing.
+                  Text messages use streaming, so the reply appears token-by-token. */}
+              {processingFile && (
                 <ChatMessage
                   role="assistant"
                   content=""
                   timestamp={new Date().toISOString()}
                   isProcessing={true}
-                  processingLabel={processingFile ? 'Reading document...' : 'Thinking...'}
+                  processingLabel="Reading document..."
                 />
               )}
               <div ref={messagesEndRef} />

@@ -3,11 +3,17 @@ AI Chat Service for NeoBright LMS.
 
 Phase 0 — extracted from ai_routes.py.
 Phase 1 — powered by the OpenAI Agents SDK.
+Phase 5 — streaming via Runner.run_streamed() + SSE.
 
 The public function `generate_chat_response` builds a per-
 request Tutor Agent, feeds it the conversation history via
 `Runner.run_sync()`, and returns the plain-text reply.
+
+`stream_chat_response` is the streaming counterpart — it
+yields SSE-formatted chunks as the LLM generates tokens.
 """
+import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -132,6 +138,159 @@ def generate_chat_response(
                 response_time_ms=(time.time() - start_time) * 1000,
             )
         return _fallback_chat_response(user_message)
+
+
+# ─────────────────────── streaming API ─────────────────────
+
+def stream_chat_response(
+    user_message: str,
+    context: dict,
+    conversation_history: list,
+    course_id: int | None,
+    app_config: dict,
+    *,
+    user_id: str | None = None,
+):
+    """
+    Generator that yields SSE-formatted chunks as the agent streams.
+
+    Each yield is a string like ``data: {...}\\n\\n``.
+
+    Event types:
+        delta   — partial text token  {"type":"delta","content":"..."}
+        done    — final message       {"type":"done","content":"<full text>"}
+        error   — error fallback      {"type":"error","content":"<msg>"}
+    """
+    start_time = time.time()
+    model = app_config.get("AI_MODEL", "gpt-4o-mini")
+
+    if not app_config.get("OPENAI_API_KEY"):
+        yield _sse({"type": "error", "content": _fallback_chat_response(user_message)})
+        return
+
+    # Build agent + context (same as sync path) ──────────
+    system_prompt = _build_chat_system_prompt(context, course_id, app_config)
+    agent = create_tutor_agent(
+        instructions=system_prompt,
+        model=model,
+        temperature=app_config.get("AI_TEMPERATURE", 0.6),
+        max_tokens=app_config.get("AI_MAX_TOKENS", 2000),
+    )
+
+    input_items: list[dict] = []
+    for msg in conversation_history:
+        input_items.append({
+            "role": msg.get("role", "user"),
+            "content": msg.get("content", ""),
+        })
+    if not conversation_history or conversation_history[-1].get("content") != user_message:
+        input_items.append({"role": "user", "content": user_message})
+
+    moodle_user_id = None
+    if user_id:
+        try:
+            user_doc = FirestoreService().get_user(user_id)
+            if user_doc:
+                moodle_user_id = user_doc.get("moodle_user_id") or user_doc.get("moodleUserId")
+                if moodle_user_id is not None:
+                    moodle_user_id = int(moodle_user_id)
+        except Exception:
+            logger.debug("Could not resolve moodle_user_id for tools")
+
+    # Get the actual Flask app object (not the proxy)
+    flask_app = current_app._get_current_object()
+
+    tutor_ctx = TutorContext(
+        firebase_uid=user_id or "",
+        moodle_user_id=moodle_user_id,
+        enrolled_courses=context.get("courses", []),
+        app=flask_app,
+    )
+
+    # ── Async streaming wrapped for sync Flask ────────────
+    try:
+        loop = asyncio.new_event_loop()
+
+        async def _run_stream():
+            from openai.types.responses import ResponseTextDeltaEvent
+
+            full_text = ""
+            result = Runner.run_streamed(
+                agent, input=input_items, context=tutor_ctx
+            )
+            async for event in result.stream_events():
+                if (
+                    event.type == "raw_response_event"
+                    and isinstance(event.data, ResponseTextDeltaEvent)
+                ):
+                    delta = event.data.delta
+                    if delta:
+                        full_text += delta
+                        yield delta
+
+            # After stream finishes, log usage
+            if user_id and result.raw_responses:
+                usage = result.raw_responses[-1].usage
+                AiLoggingService.log_ai_call(
+                    user_id=user_id,
+                    endpoint="/api/ai/chat/stream",
+                    model=model,
+                    success=True,
+                    prompt_tokens=usage.input_tokens if usage else None,
+                    completion_tokens=usage.output_tokens if usage else None,
+                    total_tokens=usage.total_tokens if usage else None,
+                    response_time_ms=(time.time() - start_time) * 1000,
+                )
+
+            # Sentinel so the outer generator knows the full text
+            yield None  # signals end
+            yield full_text  # final payload
+
+        # Drain the async generator from a sync context
+        agen = _run_stream()
+        full_text = ""
+
+        def _next():
+            return loop.run_until_complete(agen.__anext__())
+
+        while True:
+            try:
+                chunk = _next()
+            except StopAsyncIteration:
+                break
+
+            if chunk is None:
+                # Next item is the full text
+                try:
+                    full_text = _next()
+                except StopAsyncIteration:
+                    pass
+                break
+
+            yield _sse({"type": "delta", "content": chunk})
+
+        # Final done event with full assembled text
+        yield _sse({"type": "done", "content": full_text})
+
+    except Exception as e:
+        logger.error("Streaming agent error: %s", e)
+        if user_id:
+            AiLoggingService.log_ai_call(
+                user_id=user_id,
+                endpoint="/api/ai/chat/stream",
+                model=model,
+                success=False,
+                error_message=str(e),
+                response_time_ms=(time.time() - start_time) * 1000,
+            )
+        yield _sse({"type": "error", "content": _fallback_chat_response(user_message)})
+    finally:
+        loop.close()
+
+
+def _sse(data: dict) -> str:
+    """Format a dict as an SSE data line."""
+    return f"data: {json.dumps(data)}\n\n"
 
 
 # ─────────────────── prompt builders  ──────────────────────

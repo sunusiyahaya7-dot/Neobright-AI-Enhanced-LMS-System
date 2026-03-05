@@ -11,7 +11,7 @@ from services.ai_context_service import AIContextService
 from services.ai_service import AiService
 from services.ai_rate_limit_service import ai_rate_limit
 from services.firestore_service import FirestoreService
-from services.ai_chat_service import generate_chat_response
+from services.ai_chat_service import generate_chat_response, stream_chat_response
 from services.ai_course_insights_service import generate_course_insights
 from models.firestore_models import ChatMessage
 
@@ -708,6 +708,99 @@ def send_message(chat_id: str):
     
     except Exception as e:
         print(f"Error sending message: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@ai_bp.route('/ai/chats/<chat_id>/messages/stream', methods=['POST'])
+@firebase_required
+@ai_rate_limit
+def send_message_stream(chat_id: str):
+    """
+    POST /api/ai/chats/<chat_id>/messages/stream
+
+    Send a message and stream the AI response via SSE.
+    Text-only (no file upload — the sync endpoint handles files).
+
+    Request body (JSON):  { "message": "..." }
+
+    Response: text/event-stream with events:
+      data: {"type":"delta","content":"token..."}
+      data: {"type":"done","content":"full reply text"}
+    """
+    from flask import Response
+
+    try:
+        firebase_uid = g.firebase_uid
+        body = request.get_json(silent=True) or {}
+        user_message_content = body.get("message", "").strip()
+
+        if not user_message_content:
+            return jsonify({"error": "Message is required"}), 400
+
+        fs = FirestoreService()
+
+        # Verify chat exists and user owns it
+        chat_doc = fs.db.collection('ai_chats').document(chat_id).get()
+        if not chat_doc.exists:
+            return jsonify({"error": "Chat not found"}), 404
+        chat_data = chat_doc.to_dict()
+        if chat_data.get("user_id") != firebase_uid:
+            return jsonify({"error": "Access denied"}), 403
+
+        # Save user message
+        user_msg = ChatMessage(role="user", content=user_message_content)
+        fs.save_chat_message(chat_id, user_msg)
+        user_timestamp = datetime.utcnow()
+
+        # Get context
+        context_dict = _get_cached_ai_context(firebase_uid)
+        previous_messages = fs.get_chat_messages(chat_id)
+        conversation_history = previous_messages[-10:] if len(previous_messages) > 10 else previous_messages
+
+        def generate_sse():
+            """Inner generator that streams SSE events then saves the final message."""
+            full_reply = ""
+
+            for chunk in stream_chat_response(
+                user_message_content,
+                context_dict,
+                conversation_history,
+                chat_data.get("moodle_course_id"),
+                current_app.config,
+                user_id=firebase_uid,
+            ):
+                yield chunk
+
+                # Capture the full text from the done event
+                if '"type": "done"' in chunk or '"type":"done"' in chunk:
+                    import json as _json
+                    try:
+                        payload = _json.loads(chunk.removeprefix("data: ").strip())
+                        full_reply = payload.get("content", "")
+                    except Exception:
+                        pass
+
+            # After streaming completes, persist the assistant message
+            if full_reply:
+                assistant_msg = ChatMessage(role="assistant", content=full_reply)
+                fs.save_chat_message(chat_id, assistant_msg)
+                fs.db.collection('ai_chats').document(chat_id).update({
+                    "updated_at": datetime.utcnow()
+                })
+
+        return Response(
+            generate_sse(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",  # nginx pass-through
+            },
+        )
+
+    except Exception as e:
+        print(f"Error in stream endpoint: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
