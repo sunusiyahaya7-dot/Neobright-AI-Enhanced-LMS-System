@@ -65,10 +65,15 @@ export default function ChatInput({
 
     setError(null);
 
+    const msgToSend = message.trim() || 'Summarize this lecture';
+    const fileToSend = selectedFile || undefined;
+
+    // Clear input immediately so user sees responsiveness
+    setMessage('');
+    removeFile();
+
     try {
-      await onSend(message.trim() || 'Summarize this lecture', selectedFile || undefined);
-      setMessage('');
-      removeFile();
+      await onSend(msgToSend, fileToSend);
     } catch (err: any) {
       setError(err.message || 'Failed to send message');
     }

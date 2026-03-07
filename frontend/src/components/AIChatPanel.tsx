@@ -26,6 +26,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
   const [loading, setLoading] = useState(true);
   const [sendingMessage, setSendingMessage] = useState(false);
   const [processingFile, setProcessingFile] = useState(false);
+  const [waitingForStream, setWaitingForStream] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isRateLimited, setIsRateLimited] = useState(false);
   const [rateLimitCountdown, setRateLimitCountdown] = useState(0);
@@ -177,24 +178,22 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
 
       // ── Streaming path (text-only, no file) ──────────
       if (!file) {
-        // Add a placeholder assistant message that will be filled token-by-token
-        const streamingMsg: IChatMessage = {
-          role: 'assistant',
-          content: '',
-          timestamp: new Date().toISOString(),
-        };
-        setMessages((prev) => [...prev, streamingMsg]);
+        setWaitingForStream(true);
 
         try {
           await aiChatService.sendMessageStream(chatSession.chatId, userMessage, {
             onDelta: (delta) => {
+              setWaitingForStream(false);
               setMessages((prev) => {
-                const updated = [...prev];
-                const last = updated[updated.length - 1];
+                const last = prev[prev.length - 1];
                 if (last && last.role === 'assistant') {
+                  // Append to existing assistant message
+                  const updated = [...prev];
                   updated[updated.length - 1] = { ...last, content: last.content + delta };
+                  return updated;
                 }
-                return updated;
+                // No assistant message yet — add one with this first token
+                return [...prev, { role: 'assistant', content: delta, timestamp: new Date().toISOString() }];
               });
             },
             onDone: (fullText) => {
@@ -280,6 +279,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
     } finally {
       setSendingMessage(false);
       setProcessingFile(false);
+      setWaitingForStream(false);
     }
   };
 
@@ -427,13 +427,13 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
               })}
               {/* Thinking indicator — show only for file processing.
                   Text messages use streaming, so the reply appears token-by-token. */}
-              {processingFile && (
+              {(processingFile || waitingForStream) && (
                 <ChatMessage
                   role="assistant"
                   content=""
                   timestamp={new Date().toISOString()}
                   isProcessing={true}
-                  processingLabel="Reading document..."
+                  processingLabel={processingFile ? 'Reading document...' : 'Thinking...'}
                 />
               )}
               <div ref={messagesEndRef} />

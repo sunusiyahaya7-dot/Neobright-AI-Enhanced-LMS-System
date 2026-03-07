@@ -759,6 +759,10 @@ def send_message_stream(chat_id: str):
         previous_messages = fs.get_chat_messages(chat_id)
         conversation_history = previous_messages[-10:] if len(previous_messages) > 10 else previous_messages
 
+        # Capture these NOW — the generator runs outside app context
+        app_config = dict(current_app.config)
+        flask_app = current_app._get_current_object()
+
         def generate_sse():
             """Inner generator that streams SSE events then saves the final message."""
             full_reply = ""
@@ -768,8 +772,9 @@ def send_message_stream(chat_id: str):
                 context_dict,
                 conversation_history,
                 chat_data.get("moodle_course_id"),
-                current_app.config,
+                app_config,
                 user_id=firebase_uid,
+                flask_app=flask_app,
             ):
                 yield chunk
 
