@@ -851,3 +851,42 @@ def delete_chat(chat_id: str):
         return jsonify({"error": str(e)}), 500
 
 
+# ==================== TRACES (Phase 6) ====================
+
+@ai_bp.route('/ai/traces', methods=['GET'])
+@firebase_required
+def list_traces():
+    """
+    GET /api/ai/traces?limit=20&user_id=<uid>
+
+    Return recent agent traces stored by NeoBrightTracingProcessor.
+    Query params:
+        limit   – max documents (default 20, max 100)
+        user_id – filter by user (optional; if omitted returns caller's traces)
+    """
+    try:
+        firebase_uid = g.firebase_uid
+        fs = FirestoreService()
+
+        limit = min(int(request.args.get('limit', 20)), 100)
+        filter_uid = request.args.get('user_id', firebase_uid)
+
+        query = (
+            fs.db.collection('ai_traces')
+            .where('user_id', '==', filter_uid)
+            .order_by('started_at', direction='DESCENDING')
+            .limit(limit)
+        )
+
+        traces = []
+        for doc in query.stream():
+            data = doc.to_dict()
+            data['id'] = doc.id
+            traces.append(data)
+
+        return jsonify({"traces": traces, "count": len(traces)}), 200
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500

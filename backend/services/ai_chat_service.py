@@ -4,6 +4,7 @@ AI Chat Service for NeoBright LMS.
 Phase 0 — extracted from ai_routes.py.
 Phase 1 — powered by the OpenAI Agents SDK.
 Phase 5 — streaming via Runner.run_streamed() + SSE.
+Phase 6 — tracing, logging & observability.
 
 The public function `generate_chat_response` builds a per-
 request Tutor Agent, feeds it the conversation history via
@@ -23,6 +24,7 @@ from agents import Runner
 
 from services.agents.tutor_agent import create_tutor_agent
 from services.agents.tools import TutorContext
+from services.agents.tracing import NeoBrightRunHooks, set_trace_user
 from services.moodle_service import MoodleService
 from services.ai_logging_service import AiLoggingService
 from services.firestore_service import FirestoreService
@@ -104,7 +106,9 @@ def generate_chat_response(
 
     # ── Run the agent ─────────────────────────────────────
     try:
-        result = Runner.run_sync(agent, input=input_items, context=tutor_ctx)
+        hooks = NeoBrightRunHooks(user_id=user_id or "")
+        set_trace_user(user_id or "")
+        result = Runner.run_sync(agent, input=input_items, context=tutor_ctx, hooks=hooks)
         reply = result.final_output
 
         if not reply:
@@ -221,8 +225,10 @@ def stream_chat_response(
                 from openai.types.responses import ResponseTextDeltaEvent
 
                 full_text = ""
+                hooks = NeoBrightRunHooks(user_id=user_id or "")
+                set_trace_user(user_id or "")
                 result = Runner.run_streamed(
-                    agent, input=input_items, context=tutor_ctx
+                    agent, input=input_items, context=tutor_ctx, hooks=hooks
                 )
                 async for event in result.stream_events():
                     if (

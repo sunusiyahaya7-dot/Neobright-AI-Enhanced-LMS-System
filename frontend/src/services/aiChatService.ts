@@ -133,20 +133,15 @@ export const aiChatService = {
     try {
       while (true) {
         const { done, value } = await reader.read();
-        console.log('[SSE] read chunk:', { done, bytes: value?.length });
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';  // keep incomplete line
 
-        console.log('[SSE] lines to process:', lines.length, 'buffer remaining:', buffer.length);
-
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed.startsWith('data: ')) continue;
-
-          console.log('[SSE] event:', trimmed.slice(0, 80));
 
           try {
             const payload = JSON.parse(trimmed.slice(6));
