@@ -33,8 +33,19 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
   const [selectedAction, setSelectedAction] = useState<string | null>(null);
   const [lastUserId, setLastUserId] = useState<string | null>(null);
   const lastSentPrompt = useRef<string | null>(null);
+  const openCourseIdRef = useRef<number | undefined>(undefined);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const quickActionsRef = useRef<HTMLDivElement>(null);
+
+  // Freeze courseId for the lifetime of an open panel to avoid re-initializing
+  // chat (and clobbering optimistic messages) if courseId changes mid-stream.
+  useEffect(() => {
+    if (isOpen) {
+      openCourseIdRef.current = courseId;
+    } else {
+      openCourseIdRef.current = undefined;
+    }
+  }, [isOpen, courseId]);
 
   // Detect user/session change and create new chat
   useEffect(() => {
@@ -55,8 +66,10 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
         setLoading(true);
         setError(null);
 
+        const effectiveCourseId = openCourseIdRef.current;
+
         // Use course-specific localStorage key so each course has its own chat
-        const storageKey = courseId ? `activeChatId_${courseId}` : 'activeChatId';
+        const storageKey = effectiveCourseId ? `activeChatId_${effectiveCourseId}` : 'activeChatId';
         const cachedChatId = localStorage.getItem(storageKey);
 
         if (cachedChatId) {
@@ -69,8 +82,8 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
             // Chat not found (deleted/expired) — create a new one
             localStorage.removeItem(storageKey);
             const newChat = await aiChatService.createChat({
-              courseId,
-              title: courseId ? `Course ${courseId} Chat` : 'Dashboard Chat'
+              courseId: effectiveCourseId,
+              title: effectiveCourseId ? `Course ${effectiveCourseId} Chat` : 'Dashboard Chat'
             });
             setChatSession(newChat);
             const welcomeMessage: IChatMessage = {
@@ -84,8 +97,8 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
         } else {
           // Create new chat
           const newChat = await aiChatService.createChat({
-            courseId,
-            title: courseId ? `Course ${courseId} Chat` : 'Dashboard Chat'
+            courseId: effectiveCourseId,
+            title: effectiveCourseId ? `Course ${effectiveCourseId} Chat` : 'Dashboard Chat'
           });
           setChatSession(newChat);
           
@@ -109,7 +122,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
     if (isOpen) {
       initChat();
     }
-  }, [isOpen, courseId]);
+  }, [isOpen]);
 
   // Auto-send initial message when provided and chat is ready (single effect, ref-guarded)
   useEffect(() => {
@@ -123,7 +136,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
       lastSentPrompt.current = initialMessage;
       handleSendMessage(initialMessage);
     }
-  }, [initialMessage, chatSession, loading]);
+  }, [initialMessage, chatSession, loading, sendingMessage]);
 
   // Auto-scroll to latest message
   useEffect(() => {

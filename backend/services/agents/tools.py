@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
+from urllib.parse import urlparse
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -453,3 +454,157 @@ def get_quiz_attempts(
     except Exception as e:
         logger.error("get_quiz_attempts error: %s", e)
         return f"Could not retrieve quiz attempts for '{course_name}': {e}"
+
+
+# ───────────────── tool: fetch lecture notes text ─────────
+
+@function_tool
+def get_lecture_notes_text(
+    ctx: RunContextWrapper[TutorContext],
+    course_name: str,
+    lecture_or_resource_name: str,
+) -> str:
+    """Download a lecture/resource file from Moodle and extract its text.
+
+    Use this when the student asks to summarize/explain a lecture and the
+    course contains an actual file (PDF/DOCX/PPTX). The tool returns extracted
+    text (truncated) so the agent can produce a grounded summary.
+
+    Args:
+        course_name: Full or partial course name.
+        lecture_or_resource_name: Full or partial module/resource name (e.g. "Lecture 2").
+    """
+    tc = ctx.context
+    course = _find_course(tc.enrolled_courses, course_name)
+    if not course:
+        return f"No enrolled course matching '{course_name}' found."
+
+    course_id = int(course.get("moodle_id") or course.get("id"))
+    name_lower = lecture_or_resource_name.lower()
+
+    try:
+        with tc.app.app_context():
+            from flask import current_app
+            from services.moodle_service import MoodleService
+            from services.file_service import FileService
+
+            contents = MoodleService.get_course_contents(course_id)
+            if not contents:
+                return f"No content found for {course.get('name')}."
+
+            matched_mod = None
+            for section in contents:
+                for mod in section.get("modules", []):
+                    if name_lower in (mod.get("name") or "").lower():
+                        matched_mod = mod
+                        break
+                if matched_mod:
+                    break
+
+            if not matched_mod:
+                return (
+                    f"No lecture/resource matching '{lecture_or_resource_name}' found in {course.get('name')}. "
+                    "Try using the exact lecture name shown in your course."
+                )
+
+            files = matched_mod.get("contents", []) or []
+            if not files:
+                return (
+                    f"'{matched_mod.get('name', lecture_or_resource_name)}' has no attached files to extract. "
+                    "If it’s a URL/page activity, I can’t fetch it yet."
+                )
+
+            # Prefer supported mimetypes
+            supported = (
+                "application/pdf",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            )
+
+            chosen = None
+            for f in files:
+                mt = (f.get("mimetype") or "").lower()
+                if any(s in mt for s in supported):
+                    chosen = f
+                    break
+            if chosen is None:
+                chosen = files[0]
+
+            fileurl = chosen.get("fileurl")
+            filename = chosen.get("filename") or matched_mod.get("name") or "lecture"
+            mimetype = chosen.get("mimetype") or "application/octet-stream"
+
+            if not fileurl:
+                return f"Found '{matched_mod.get('name')}', but Moodle did not provide a file URL to download."
+
+            # Moodle file URLs often include query params like `?forcedownload=1`.
+            parsed = urlparse(fileurl)
+            path = parsed.path or ""
+            query = parsed.query or ""
+
+            marker_webservice = "/webservice/pluginfile.php/"
+            marker_plain = "/pluginfile.php/"
+            if marker_webservice in path:
+                plugin_rel = path.split(marker_webservice, 1)[1]
+            elif marker_plain in path:
+                plugin_rel = path.split(marker_plain, 1)[1]
+            else:
+                return (
+                    "This resource file URL isn't in the expected Moodle pluginfile format, so I can't download it yet. "
+                    "Try uploading the file here instead."
+                )
+
+            base_url = (
+                (current_app.config.get("MOODLE_INTERNAL_BASE_URL") or current_app.config.get("MOODLE_BASE_URL") or "")
+                .rstrip("/")
+            )
+            token = current_app.config.get("MOODLE_TOKEN")
+            if not base_url or not token:
+                return "Moodle is not configured (missing MOODLE_BASE_URL/MOODLE_TOKEN)."
+
+            moodle_file_url = f"{base_url}/webservice/pluginfile.php/{plugin_rel}?token={token}"
+            if query:
+                moodle_file_url += f"&{query}"
+
+            resp = MoodleService.fetch_file_stream(moodle_file_url)
+
+            # Detect common failure mode: Moodle returns JSON error payload instead of file bytes.
+            content_type = (resp.headers.get("Content-Type") or "").lower()
+            if "application/json" in content_type or content_type.startswith("text/"):
+                try:
+                    head = resp.raw.read(512, decode_content=True)
+                    preview = head.decode("utf-8", errors="replace").strip()
+                except Exception:
+                    preview = "(unable to read error payload)"
+                return (
+                    f"I tried downloading '{filename}', but Moodle returned an error instead of the file. "
+                    f"Content-Type={content_type}. Payload: {preview[:200]}"
+                )
+            # Read bytes with a safety cap (15 MB)
+            max_bytes = 15 * 1024 * 1024
+            buf = bytearray()
+            for chunk in resp.iter_content(chunk_size=8192):
+                if not chunk:
+                    continue
+                buf.extend(chunk)
+                if len(buf) > max_bytes:
+                    return (
+                        f"The file '{filename}' is too large to extract in-chat (>15MB). "
+                        "Try downloading it and uploading just the relevant pages/slides."
+                    )
+
+            extracted = FileService.process_uploaded_file(bytes(buf), filename, mimetype)
+            if not extracted:
+                return f"I downloaded '{filename}' but couldn't extract readable text from it."
+
+            # Truncate to keep prompts sane
+            limit = 12000
+            text = extracted if len(extracted) <= limit else extracted[:limit] + "\n\n... [truncated]"
+            return (
+                f"Extracted content from '{matched_mod.get('name', lecture_or_resource_name)}' ({filename}):\n\n"
+                f"---\n{text}\n---"
+            )
+
+    except Exception as e:
+        logger.error("get_lecture_notes_text error: %s", e)
+        return f"Could not fetch lecture notes for '{lecture_or_resource_name}': {e}"
