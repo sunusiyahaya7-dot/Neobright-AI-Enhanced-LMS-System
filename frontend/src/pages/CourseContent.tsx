@@ -898,6 +898,7 @@ export default function CourseContent() {
               }}
               courseId={Number(id)}
               initialMessage={chatPrompt}
+              initialMessageMode="draft"
             />
             
 

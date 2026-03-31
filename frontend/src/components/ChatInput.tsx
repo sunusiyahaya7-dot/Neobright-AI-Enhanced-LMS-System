@@ -6,6 +6,7 @@ interface ChatInputProps {
   isRateLimited: boolean;
   rateLimitMessage?: string;
   placeholder?: string;
+  draftMessage?: string;
 }
 
 export default function ChatInput({
@@ -13,13 +14,35 @@ export default function ChatInput({
   isLoading,
   isRateLimited,
   rateLimitMessage,
-  placeholder = 'Ask about your course...'
+  placeholder = 'Ask about your course...',
+  draftMessage,
 }: ChatInputProps) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Prefill draft message (e.g., quick queries) and focus the input
+  useEffect(() => {
+    if (typeof draftMessage !== 'string') return;
+    if (!draftMessage.trim()) return;
+
+    setMessage(draftMessage);
+    // Focus next tick so the panel has mounted
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      // Move caret to end
+      const end = el.value.length;
+      try {
+        el.setSelectionRange(end, end);
+      } catch {
+        // ignore selection errors
+      }
+    });
+  }, [draftMessage]);
 
   // Auto-resize textarea
   useEffect(() => {

@@ -1,6 +1,5 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { X, ChevronDown, Sparkles, BookOpen, BarChart3, Clock, AlertCircle, Loader2 } from 'lucide-react';
-import { useAuth } from '../auth/AuthContext';
+import { useEffect, useState, useRef } from 'react';
+import { X, Sparkles, BookOpen, BarChart3, Clock, AlertCircle, Loader2 } from 'lucide-react';
 import ChatMessage from './ChatMessage';
 import ChatInput from './ChatInput';
 import { aiChatService, ChatSession, ChatMessage as IChatMessage } from '../services/aiChatService';
@@ -17,10 +16,10 @@ interface AIChatPanelProps {
   isOpen: boolean;
   onClose: () => void;
   initialMessage?: string;
+  initialMessageMode?: 'send' | 'draft';
 }
 
-export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage }: AIChatPanelProps) {
-  const { user } = useAuth();
+export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage, initialMessageMode = 'send' }: AIChatPanelProps) {
   const [chatSession, setChatSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<IChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -31,9 +30,9 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
   const [isRateLimited, setIsRateLimited] = useState(false);
   const [rateLimitCountdown, setRateLimitCountdown] = useState(0);
   const [selectedAction, setSelectedAction] = useState<string | null>(null);
-  const [lastUserId, setLastUserId] = useState<string | null>(null);
   const lastSentPrompt = useRef<string | null>(null);
   const openCourseIdRef = useRef<number | undefined>(undefined);
+  const initRunIdRef = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const quickActionsRef = useRef<HTMLDivElement>(null);
 
@@ -47,20 +46,13 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
     }
   }, [isOpen, courseId]);
 
-  // Detect user/session change and create new chat
-  useEffect(() => {
-    if (user?.uid && user.uid !== lastUserId) {
-      // User has changed or logged in - clear all chat sessions
-      const keysToRemove = Object.keys(localStorage).filter(k => k.startsWith('activeChatId'));
-      keysToRemove.forEach(k => localStorage.removeItem(k));
-      setChatSession(null);
-      setMessages([]);
-      setLastUserId(user.uid);
-    }
-  }, [user?.uid]);
-
   // Load or create chat session on mount
   useEffect(() => {
+    if (!isOpen) return;
+
+    const runId = ++initRunIdRef.current;
+    let cancelled = false;
+
     const initChat = async () => {
       try {
         setLoading(true);
@@ -76,6 +68,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
           // Load existing chat
           try {
             const chat = await aiChatService.getChat(cachedChatId);
+            if (cancelled || initRunIdRef.current !== runId) return;
             setChatSession(chat);
             setMessages(chat.messages || []);
           } catch {
@@ -85,6 +78,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
               courseId: effectiveCourseId,
               title: effectiveCourseId ? `Course ${effectiveCourseId} Chat` : 'Dashboard Chat'
             });
+            if (cancelled || initRunIdRef.current !== runId) return;
             setChatSession(newChat);
             const welcomeMessage: IChatMessage = {
               role: 'assistant',
@@ -100,6 +94,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
             courseId: effectiveCourseId,
             title: effectiveCourseId ? `Course ${effectiveCourseId} Chat` : 'Dashboard Chat'
           });
+          if (cancelled || initRunIdRef.current !== runId) return;
           setChatSession(newChat);
           
           // Add welcome message for fresh chat
@@ -113,19 +108,23 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
           localStorage.setItem(storageKey, newChat.chatId);
         }
       } catch (err: any) {
+        if (cancelled || initRunIdRef.current !== runId) return;
         setError(err.message || 'Failed to load chat');
       } finally {
+        if (cancelled || initRunIdRef.current !== runId) return;
         setLoading(false);
       }
     };
 
-    if (isOpen) {
-      initChat();
-    }
+    initChat();
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen]);
 
   // Auto-send initial message when provided and chat is ready (single effect, ref-guarded)
   useEffect(() => {
+    if (initialMessageMode !== 'send') return;
     if (
       initialMessage &&
       chatSession &&
@@ -136,7 +135,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
       lastSentPrompt.current = initialMessage;
       handleSendMessage(initialMessage);
     }
-  }, [initialMessage, chatSession, loading, sendingMessage]);
+  }, [initialMessageMode, initialMessage, chatSession, loading, sendingMessage]);
 
   // Auto-scroll to latest message
   useEffect(() => {
@@ -459,6 +458,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
           onSend={handleSendMessage}
           isLoading={sendingMessage}
           isRateLimited={isRateLimited}
+          draftMessage={initialMessageMode === 'draft' ? initialMessage : undefined}
           rateLimitMessage={
             isRateLimited && rateLimitCountdown > 0
               ? `Please wait ${rateLimitCountdown}s before sending another message`
