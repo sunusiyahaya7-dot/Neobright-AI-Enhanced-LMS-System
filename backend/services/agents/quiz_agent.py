@@ -20,6 +20,7 @@ from agents import Agent, ModelSettings
 from services.agents.tools import (
     get_grade_details,
     search_course_content,
+    get_quiz_attempts,
 )
 
 QUIZ_INSTRUCTIONS = """\
@@ -77,5 +78,5 @@ def create_quiz_agent(
             temperature=temperature,
             max_tokens=max_tokens,
         ),
-        tools=[search_course_content],
+        tools=[search_course_content, get_quiz_attempts],
     )

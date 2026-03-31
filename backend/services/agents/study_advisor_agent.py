@@ -16,6 +16,8 @@ from agents import Agent, ModelSettings
 from services.agents.tools import (
     get_grade_details,
     search_course_content,
+    get_course_activities_status,
+    get_quiz_attempts,
 )
 
 STUDY_ADVISOR_INSTRUCTIONS = """\
@@ -74,5 +76,5 @@ def create_study_advisor_agent(
             temperature=temperature,
             max_tokens=max_tokens,
         ),
-        tools=[get_grade_details, search_course_content],
+        tools=[get_grade_details, search_course_content, get_course_activities_status, get_quiz_attempts],
     )

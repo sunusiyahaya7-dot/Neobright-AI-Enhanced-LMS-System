@@ -1,5 +1,5 @@
 """
-NeoBright Tutor Agent — Phase 1 foundation, Phase 2 tools, Phase 3 handoffs.
+NeoBright Tutor Agent — Phase 1 foundation, Phase 2 tools, Phase 3 handoffs, Phase 4 actions.
 
 Defines the primary student-facing chat agent using the
 OpenAI Agents SDK.  The agent receives a fully-rendered
@@ -10,6 +10,10 @@ Phase 2 attached function tools for live Moodle data.
 Phase 3 adds handoffs to specialized sub-agents:
   • Quiz Master   — quiz generation, answer checking, scoring
   • Study Advisor  — study plans, progress analysis, scheduling
+Phase 4 adds action tools (write operations):
+  • mark_activity_done           — mark a module as complete in Moodle
+  • get_course_activities_status  — list activities with done/not-done status
+  • get_quiz_attempts            — quiz attempt history and scores
 
 Future phases:
   Phase 5 — Streaming
@@ -21,6 +25,10 @@ from services.agents.tools import (
     get_grade_details,
     get_assignment_details,
     search_course_content,
+    get_lecture_notes_text,
+    get_course_activities_status,
+    mark_activity_done,
+    get_quiz_attempts,
 )
 from services.agents.quiz_agent import create_quiz_agent
 from services.agents.study_advisor_agent import create_study_advisor_agent
@@ -31,6 +39,10 @@ TUTOR_TOOLS = [
     get_grade_details,
     get_assignment_details,
     search_course_content,
+    get_lecture_notes_text,
+    get_course_activities_status,
+    mark_activity_done,
+    get_quiz_attempts,
 ]
 
 # Pre-build handoff agents (stateless — safe to reuse across requests)

@@ -3,11 +3,18 @@ AI Chat Service for NeoBright LMS.
 
 Phase 0 — extracted from ai_routes.py.
 Phase 1 — powered by the OpenAI Agents SDK.
+Phase 5 — streaming via Runner.run_streamed() + SSE.
+Phase 6 — tracing, logging & observability.
 
 The public function `generate_chat_response` builds a per-
 request Tutor Agent, feeds it the conversation history via
 `Runner.run_sync()`, and returns the plain-text reply.
+
+`stream_chat_response` is the streaming counterpart — it
+yields SSE-formatted chunks as the LLM generates tokens.
 """
+import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -17,6 +24,7 @@ from agents import Runner
 
 from services.agents.tutor_agent import create_tutor_agent
 from services.agents.tools import TutorContext
+from services.agents.tracing import NeoBrightRunHooks, set_trace_user
 from services.moodle_service import MoodleService
 from services.ai_logging_service import AiLoggingService
 from services.firestore_service import FirestoreService
@@ -98,7 +106,9 @@ def generate_chat_response(
 
     # ── Run the agent ─────────────────────────────────────
     try:
-        result = Runner.run_sync(agent, input=input_items, context=tutor_ctx)
+        hooks = NeoBrightRunHooks(user_id=user_id or "")
+        set_trace_user(user_id or "")
+        result = Runner.run_sync(agent, input=input_items, context=tutor_ctx, hooks=hooks)
         reply = result.final_output
 
         if not reply:
@@ -132,6 +142,167 @@ def generate_chat_response(
                 response_time_ms=(time.time() - start_time) * 1000,
             )
         return _fallback_chat_response(user_message)
+
+
+# ─────────────────────── streaming API ─────────────────────
+
+def stream_chat_response(
+    user_message: str,
+    context: dict,
+    conversation_history: list,
+    course_id: int | None,
+    app_config: dict,
+    *,
+    user_id: str | None = None,
+    flask_app=None,
+):
+    """
+    Generator that yields SSE-formatted chunks as the agent streams.
+
+    Each yield is a string like ``data: {...}\\n\\n``.
+
+    Event types:
+        delta   — partial text token  {"type":"delta","content":"..."}
+        done    — final message       {"type":"done","content":"<full text>"}
+        error   — error fallback      {"type":"error","content":"<msg>"}
+    """
+    start_time = time.time()
+    model = app_config.get("AI_MODEL", "gpt-4o-mini")
+
+    # Use the Flask app passed in (generator runs outside app context)
+    if flask_app is None:
+        flask_app = current_app._get_current_object()
+
+    if not app_config.get("OPENAI_API_KEY"):
+        yield _sse({"type": "error", "content": _fallback_chat_response(user_message)})
+        return
+
+    # Wrap everything in app context — MoodleService, FirestoreService,
+    # _build_chat_system_prompt etc. all need current_app internally.
+    with flask_app.app_context():
+
+        # Build agent + context (same as sync path) ──────────
+        system_prompt = _build_chat_system_prompt(context, course_id, app_config)
+        agent = create_tutor_agent(
+            instructions=system_prompt,
+            model=model,
+            temperature=app_config.get("AI_TEMPERATURE", 0.6),
+            max_tokens=app_config.get("AI_MAX_TOKENS", 2000),
+        )
+
+        input_items: list[dict] = []
+        for msg in conversation_history:
+            input_items.append({
+                "role": msg.get("role", "user"),
+                "content": msg.get("content", ""),
+            })
+        if not conversation_history or conversation_history[-1].get("content") != user_message:
+            input_items.append({"role": "user", "content": user_message})
+
+        moodle_user_id = None
+        if user_id:
+            try:
+                user_doc = FirestoreService().get_user(user_id)
+                if user_doc:
+                    moodle_user_id = user_doc.get("moodle_user_id") or user_doc.get("moodleUserId")
+                    if moodle_user_id is not None:
+                        moodle_user_id = int(moodle_user_id)
+            except Exception:
+                logger.debug("Could not resolve moodle_user_id for tools")
+
+        tutor_ctx = TutorContext(
+            firebase_uid=user_id or "",
+            moodle_user_id=moodle_user_id,
+            enrolled_courses=context.get("courses", []),
+            app=flask_app,
+        )
+
+        # ── Async streaming wrapped for sync Flask ────────────
+        try:
+            loop = asyncio.new_event_loop()
+
+            async def _run_stream():
+                from openai.types.responses import ResponseTextDeltaEvent
+
+                full_text = ""
+                hooks = NeoBrightRunHooks(user_id=user_id or "")
+                set_trace_user(user_id or "")
+                result = Runner.run_streamed(
+                    agent, input=input_items, context=tutor_ctx, hooks=hooks
+                )
+                async for event in result.stream_events():
+                    if (
+                        event.type == "raw_response_event"
+                        and isinstance(event.data, ResponseTextDeltaEvent)
+                    ):
+                        delta = event.data.delta
+                        if delta:
+                            full_text += delta
+                            yield delta
+
+                # After stream finishes, log usage
+                if user_id and result.raw_responses:
+                    usage = result.raw_responses[-1].usage
+                    AiLoggingService.log_ai_call(
+                        user_id=user_id,
+                        endpoint="/api/ai/chat/stream",
+                        model=model,
+                        success=True,
+                        prompt_tokens=usage.input_tokens if usage else None,
+                        completion_tokens=usage.output_tokens if usage else None,
+                        total_tokens=usage.total_tokens if usage else None,
+                        response_time_ms=(time.time() - start_time) * 1000,
+                    )
+
+                # Sentinel so the outer generator knows the full text
+                yield None  # signals end
+                yield full_text  # final payload
+
+            # Drain the async generator from a sync context
+            agen = _run_stream()
+            full_text = ""
+
+            def _next():
+                return loop.run_until_complete(agen.__anext__())
+
+            while True:
+                try:
+                    chunk = _next()
+                except StopAsyncIteration:
+                    break
+
+                if chunk is None:
+                    # Next item is the full text
+                    try:
+                        full_text = _next()
+                    except StopAsyncIteration:
+                        pass
+                    break
+
+                yield _sse({"type": "delta", "content": chunk})
+
+            # Final done event with full assembled text
+            yield _sse({"type": "done", "content": full_text})
+
+        except Exception as e:
+            logger.error("Streaming agent error: %s", e)
+            if user_id:
+                AiLoggingService.log_ai_call(
+                    user_id=user_id,
+                    endpoint="/api/ai/chat/stream",
+                    model=model,
+                    success=False,
+                    error_message=str(e),
+                    response_time_ms=(time.time() - start_time) * 1000,
+                )
+            yield _sse({"type": "error", "content": _fallback_chat_response(user_message)})
+        finally:
+            loop.close()
+
+
+def _sse(data: dict) -> str:
+    """Format a dict as an SSE data line."""
+    return f"data: {json.dumps(data)}\n\n"
 
 
 # ─────────────────── prompt builders  ──────────────────────
@@ -198,7 +369,8 @@ SUMMARIZATION & TOPIC EXPLANATION GUIDELINES:
 - When a student asks to summarize or explain a topic:
   - If COURSE CONTENT STRUCTURE is available above, use the section/module names to identify what the topic covers
   - Use the module names (lectures, labs, resources) listed under each section as context clues for what the topic teaches
-  - Explain based on your general knowledge of the subject matter, referencing the specific modules/lectures under that topic
+    - If the student is asking about a specific lecture/resource (e.g. "Lecture 2" or a named PPTX/PDF), call **get_lecture_notes_text** to fetch the actual lecture file contents and base your summary on it
+    - If you cannot fetch the lecture text (unsupported type / too large / no file), then explain based on your general knowledge, clearly stating it is a general explanation
   - Do NOT ask the student to provide materials if you already have the course structure — use the module/lecture names as guidance
   - Only ask for uploaded notes if the topic is highly specialized and you have zero course content context
 - Summarize concisely, focusing on key points and main ideas
@@ -220,7 +392,24 @@ TOOL USE:
     its requirements, or its full description.
   • **search_course_content** — call when the student asks about topics, lectures, or
     materials in a course (especially if it is not the active course shown above).
+    • **get_lecture_notes_text** — call when the student asks you to summarize/explain a
+        specific lecture/resource in a course and you need the actual file contents.
+  • **get_course_activities_status** — call when the student asks what they've completed
+    or not completed, or when you need to resolve an activity name before marking it done.
+  • **get_quiz_attempts** — call when the student asks about their quiz results, past
+    attempts, or performance on quizzes in a course.
 - For simple questions answerable from the STUDENT CONTEXT above, do NOT call tools — just reply directly.
+
+ACTIONS (write operations):
+- You can perform actions that CHANGE the student's records. Use with care:
+  • **mark_activity_done** — marks a specific activity as complete in Moodle AND Firestore.
+    ONLY call this when the student EXPLICITLY asks to mark something as done
+    (e.g. "mark Lab 2 as done", "I finished the Chapter 3 lecture", "mark it as complete").
+    NEVER mark things done on your own initiative.
+- Before performing any action, confirm what you're about to do:
+  e.g. "I'll mark **Lab 2: Testing Basics** as complete in SQA. Go ahead?"
+  Then proceed only after the student confirms (or if their original message is already a clear instruction).
+- After a successful action, always tell the student what was done.
 
 HANDOFFS:
 - You can hand off to specialized agents when the student's request matches their expertise:

@@ -108,6 +108,46 @@ class FileService:
             logger.debug(f"OCR failed: {e}")
         
         return "[Image uploaded. OCR not available - please describe the content you'd like help with.]"
+
+    @staticmethod
+    def extract_text_from_docx(file_content: bytes) -> Optional[str]:
+        """Extract text from a DOCX file."""
+        try:
+            from docx import Document
+
+            doc = Document(io.BytesIO(file_content))
+            paragraphs = [p.text.strip() for p in doc.paragraphs if (p.text or "").strip()]
+            text = "\n".join(paragraphs)
+            return text.strip() if text.strip() else None
+        except ImportError:
+            logger.warning("python-docx not installed")
+            return None
+        except Exception as e:
+            logger.warning(f"DOCX extraction failed: {e}")
+            return None
+
+    @staticmethod
+    def extract_text_from_pptx(file_content: bytes) -> Optional[str]:
+        """Extract text from a PPTX file (slide text only)."""
+        try:
+            from pptx import Presentation
+
+            prs = Presentation(io.BytesIO(file_content))
+            parts: list[str] = []
+            for slide in prs.slides:
+                for shape in slide.shapes:
+                    if hasattr(shape, "text"):
+                        t = (shape.text or "").strip()
+                        if t:
+                            parts.append(t)
+            text = "\n\n".join(parts)
+            return text.strip() if text.strip() else None
+        except ImportError:
+            logger.warning("python-pptx not installed")
+            return None
+        except Exception as e:
+            logger.warning(f"PPTX extraction failed: {e}")
+            return None
     
     @staticmethod
     def _is_pdf(file_type: str, filename: str) -> bool:
@@ -128,6 +168,24 @@ class FileService:
         return (
             file_type_lower.startswith('image/')
             or any(filename_lower.endswith(ext) for ext in image_extensions)
+        )
+
+    @staticmethod
+    def _is_docx(file_type: str, filename: str) -> bool:
+        file_type_lower = (file_type or "").lower().strip()
+        filename_lower = (filename or "").lower()
+        return (
+            "wordprocessingml.document" in file_type_lower
+            or filename_lower.endswith(".docx")
+        )
+
+    @staticmethod
+    def _is_pptx(file_type: str, filename: str) -> bool:
+        file_type_lower = (file_type or "").lower().strip()
+        filename_lower = (filename or "").lower()
+        return (
+            "presentationml.presentation" in file_type_lower
+            or filename_lower.endswith(".pptx")
         )
 
     @staticmethod
@@ -163,6 +221,26 @@ class FileService:
             elif FileService._is_image(file_type, filename):
                 print(f"[FILE PROCESS] Detected as image, extracting text...")
                 return FileService.extract_text_from_image(file_content, file_type)
+
+            elif FileService._is_docx(file_type, filename):
+                print(f"[FILE PROCESS] Detected as DOCX, extracting text...")
+                text = FileService.extract_text_from_docx(file_content)
+                if text:
+                    return text
+                return (
+                    f"[DOCX file '{filename}' was uploaded but text extraction failed. "
+                    "Ask the student to paste the key content or describe what is in the document.]"
+                )
+
+            elif FileService._is_pptx(file_type, filename):
+                print(f"[FILE PROCESS] Detected as PPTX, extracting text...")
+                text = FileService.extract_text_from_pptx(file_content)
+                if text:
+                    return text
+                return (
+                    f"[PPTX file '{filename}' was uploaded but text extraction failed. "
+                    "Ask the student to paste the key content or describe what is in the slides.]"
+                )
 
             else:
                 print(f"[FILE PROCESS] Unsupported file type: {file_type}")
