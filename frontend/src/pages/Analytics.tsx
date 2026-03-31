@@ -1,11 +1,9 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import AIChatPanel from '../components/AIChatPanel';
 import api from '../api/client';
-import { useAuth } from "../auth/AuthContext";
 import {
   analyticsService,
   AnalyticsOverview,
-  CourseAnalytics,
 } from "../services/analyticsService";
 import { getCourses, getCourseAssignments } from "../services/moodleService";
 import { progressService } from "../services/progressService";
@@ -24,8 +22,6 @@ import { Link } from "react-router-dom";
 import {
   LineChart,
   Line,
-  AreaChart,
-  Area,
   BarChart,
   Bar,
   PieChart,
@@ -37,8 +33,6 @@ import {
   Tooltip,
   ResponsiveContainer,
   Legend,
-  RadialBarChart,
-  RadialBar,
 } from "recharts";
 
 
@@ -56,7 +50,6 @@ interface AssignmentStats {
 }
 
 export default function Analytics() {
-  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [analytics, setAnalytics] = useState<AnalyticsOverview | null>(null);
   const [courses, setCourses] = useState<Course[]>([]);
@@ -68,11 +61,18 @@ export default function Analytics() {
   });
   const [progressData, setProgressData] = useState<any[]>([]);
   const [weeklyProgressData, setWeeklyProgressData] = useState<any[]>([]);
-  const [averageVelocity, setAverageVelocity] = useState<number>(0);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatPrompt, setChatPrompt] = useState<string | undefined>(undefined);
   const [aiInsight, setAiInsight] = useState<{ summary: string; actions: { title: string; description: string; priority: string }[]; strengths: string[] } | null>(null);
   const [insightLoading, setInsightLoading] = useState(false);
+
+  // Per-visit chat: keep history while on this page, but start fresh when leaving and returning.
+  useEffect(() => {
+    const storageKey = 'activeChatId_0';
+    return () => {
+      localStorage.removeItem(storageKey);
+    };
+  }, []);
 
   useEffect(() => {
     loadAnalytics();
@@ -118,7 +118,7 @@ export default function Analytics() {
           velocities.length > 0
             ? velocities.reduce((a, b) => a + b, 0) / velocities.length
             : 0;
-        setAverageVelocity(Math.round(avgVel * 100) / 100);
+        void avgVel;
       }
 
       const assignmentPromises = courseList.map((course: Course) =>
