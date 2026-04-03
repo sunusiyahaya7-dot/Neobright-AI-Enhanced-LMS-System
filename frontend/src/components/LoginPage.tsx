@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { motion } from 'framer-motion'
 import { Mail, Lock, Sparkles, AlertCircle } from 'lucide-react'
-import { loginWithEmail, loginWithGoogle } from '../services/authService'
+import { getSignInMethods, loginWithEmail, loginWithGoogle, requestPasswordReset } from '../services/authService'
 
 interface LoginPageProps {
   onLogin: () => void
@@ -11,18 +11,74 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [info, setInfo] = useState('')
   const [loading, setLoading] = useState(false)
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    setInfo('')
     setLoading(true)
 
     try {
-      await loginWithEmail(email, password)
+      await loginWithEmail(email.trim(), password)
       onLogin() // Notify parent that login succeeded
     } catch (err: any) {
-      setError(err.message || 'Failed to sign in. Please check your credentials.')
+      const code: string | undefined = err?.code
+      if (code === 'auth/user-disabled') {
+        setError('This account has been disabled. Please contact support.')
+      } else if (code === 'auth/invalid-email') {
+        setError('Please enter a valid email address.')
+      } else if (
+        code === 'auth/invalid-credential' ||
+        code === 'auth/invalid-login-credentials' ||
+        code === 'auth/wrong-password' ||
+        code === 'auth/user-not-found'
+      ) {
+        // Distinguish between Google-only accounts, password accounts, and unknown accounts
+        try {
+          const methods = await getSignInMethods(email)
+          const hasGoogle = methods.includes('google.com')
+          const hasPassword = methods.includes('password')
+
+          if (methods.length === 0) {
+            setError('No account found for this email. Please contact your administrator.')
+          } else if (hasGoogle && !hasPassword) {
+            setError('This email is set up for Google sign-in. Use “Continue with Google” or click “Forgot password?” to set a password for email sign-in.')
+          } else {
+            setError('Invalid email or password.')
+          }
+        } catch {
+          setError('Invalid email or password.')
+        }
+      } else {
+        setError(err?.message || 'Failed to sign in. Please check your credentials.')
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleForgotPassword = async () => {
+    setError('')
+    setInfo('')
+    if (!email.trim()) {
+      setError('Enter your email address first, then click “Forgot password?”.')
+      return
+    }
+    setLoading(true)
+    try {
+      await requestPasswordReset(email)
+      setInfo('Password reset email sent. Check your inbox to set a password, then sign in with email.')
+    } catch (err: any) {
+      const code: string | undefined = err?.code
+      if (code === 'auth/user-not-found') {
+        setError('No account found for this email. Please contact your administrator.')
+      } else if (code === 'auth/invalid-email') {
+        setError('Please enter a valid email address.')
+      } else {
+        setError(err?.message || 'Failed to send password reset email.')
+      }
     } finally {
       setLoading(false)
     }
@@ -120,6 +176,18 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
               </motion.div>
             )}
 
+            {/* Info Alert */}
+            {info && !error && (
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl flex items-start gap-3"
+              >
+                <AlertCircle size={20} className="text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                <p className="text-sm text-blue-700 dark:text-blue-200">{info}</p>
+              </motion.div>
+            )}
+
             {/* Google Sign-In */}
             <button
              onClick={handleGoogleLogin}
@@ -193,9 +261,14 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
                   />
                   <span className="text-gray-600 dark:text-gray-400">Remember me</span>
                 </label>
-                <a href="#" className="text-[#1E5BF0] dark:text-[#2C7CF0] hover:underline">
+                <button
+                  type="button"
+                  onClick={handleForgotPassword}
+                  disabled={loading}
+                  className="text-[#1E5BF0] dark:text-[#2C7CF0] hover:underline disabled:opacity-50"
+                >
                   Forgot password?
-                </a>
+                </button>
               </div>
 
               <button
