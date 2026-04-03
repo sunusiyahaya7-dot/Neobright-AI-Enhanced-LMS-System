@@ -122,6 +122,15 @@ export default function CourseContent() {
     }
   }, [id]);
 
+  // Per-visit chat: keep history while on this page, but start fresh when leaving and returning.
+  useEffect(() => {
+    if (!id) return;
+    const storageKey = `activeChatId_${Number(id)}`;
+    return () => {
+      localStorage.removeItem(storageKey);
+    };
+  }, [id]);
+
   // Fetch quizzes for this course
   const fetchQuizzes = async () => {
     try {
@@ -898,6 +907,7 @@ export default function CourseContent() {
               }}
               courseId={Number(id)}
               initialMessage={chatPrompt}
+              initialMessageMode="draft"
             />
             
 
