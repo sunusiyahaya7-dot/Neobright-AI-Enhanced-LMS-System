@@ -1,7 +1,9 @@
 import { auth } from '../firebase'
 import {
   createUserWithEmailAndPassword,
+  fetchSignInMethodsForEmail,
   signInWithEmailAndPassword,
+  sendPasswordResetEmail,
   signOut,
   onAuthStateChanged,
   User,
@@ -26,10 +28,30 @@ export async function registerWithEmail(email: string, password: string) {
  * Login with email and password
  */
 export async function loginWithEmail(email: string, password: string) {
-  const userCredential = await signInWithEmailAndPassword(auth, email, password)
+  const normalizedEmail = (email || '').trim()
+  const userCredential = await signInWithEmailAndPassword(auth, normalizedEmail, password)
   // Create or update user profile in Firestore
   await createOrUpdateUserProfile(userCredential.user)
   return userCredential
+}
+
+/**
+ * Get sign-in methods for an email.
+ * Useful to distinguish Google-only vs password-enabled accounts.
+ */
+export async function getSignInMethods(email: string): Promise<string[]> {
+  const normalizedEmail = (email || '').trim()
+  if (!normalizedEmail) return []
+  return fetchSignInMethodsForEmail(auth, normalizedEmail)
+}
+
+/**
+ * Send a password reset email (lets an existing user set a password).
+ */
+export async function requestPasswordReset(email: string): Promise<void> {
+  const normalizedEmail = (email || '').trim()
+  if (!normalizedEmail) throw new Error('Please enter your email address first.')
+  await sendPasswordResetEmail(auth, normalizedEmail)
 }
 
 /**

@@ -185,7 +185,7 @@ export default function Sidebar() {
           <div className="bg-white dark:bg-[#1A1C20] rounded-2xl p-6 shadow-2xl max-w-sm w-full border border-gray-200 dark:border-[#2A2D32]">
             <h3 className="text-lg font-bold text-gray-900 dark:text-white">Log out?</h3>
             <p className="text-sm text-gray-600 dark:text-gray-400 mt-2">
-              Are you sure you want to log out Nigga? Everywhere go first blur oo.
+              Are you sure you want to log out?
             </p>
 
             <div className="flex items-center gap-3 justify-end mt-6">
