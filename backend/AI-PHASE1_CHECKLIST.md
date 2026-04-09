@@ -62,7 +62,7 @@
 
 ### Rate Limiting Service
 - [x] `AiRateLimitService` created
-- [x] Limits: 2 calls/minute, 20 calls/hour per user
+- [x] Limits: 6 calls/minute, 30 calls/hour per user
 - [x] `check_rate_limit()` method working
 - [x] `@ai_rate_limit` decorator applied to `/api/ai/insights`
 - [x] Returns 429 with helpful error messages
@@ -92,7 +92,7 @@
 - [x] Health check endpoint works
 - [x] `/api/ai/context` returns valid student data
 - [x] `/api/ai/insights` returns AI insights with logging
-- [x] Rate limiting triggers on 3rd request (429 response)
+- [x] Rate limiting triggers on 6th request (429 response)
 - [x] Firestore logs created with all fields
 - [x] Response time tracked (avg ~11 seconds)
 
