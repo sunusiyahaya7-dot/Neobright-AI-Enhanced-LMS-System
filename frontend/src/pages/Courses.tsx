@@ -71,6 +71,14 @@ export default function Courses() {
   const [aiRecommendedIds, setAiRecommendedIds] = useState<Set<string>>(new Set());
   const [courseDeadlines, setCourseDeadlines] = useState<Record<number, number>>({}); // courseId -> nearest duedate (epoch sec)
 
+  // Per-visit chat: keep history while on this page, but start fresh when leaving and returning.
+  useEffect(() => {
+    const storageKey = 'activeChatId';
+    return () => {
+      localStorage.removeItem(storageKey);
+    };
+  }, []);
+
   // Helper to get course progress
   const getProgress = (courseId: number) =>
     progressData[courseId]?.progress ?? generateCourseMetadata(courseId).progress;

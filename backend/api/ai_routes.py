@@ -11,7 +11,8 @@ from services.ai_context_service import AIContextService
 from services.ai_service import AiService
 from services.ai_rate_limit_service import ai_rate_limit
 from services.firestore_service import FirestoreService
-from services.moodle_service import MoodleService
+from services.ai_chat_service import generate_chat_response, stream_chat_response
+from services.ai_course_insights_service import generate_course_insights
 from models.firestore_models import ChatMessage
 
 
@@ -248,9 +249,10 @@ def get_course_insights(course_id: int):
             if q.get('course', '') == course_name
         ]
         
-        # Generate using OpenAI
-        insights_data = _generate_course_insights(
-            target_course, course_assignments, course_quizzes, context_dict, current_app.config
+        # Generate using extracted service
+        insights_data = generate_course_insights(
+            target_course, course_assignments, course_quizzes, context_dict, current_app.config,
+            user_id=firebase_uid
         )
         
         # Cache
@@ -268,141 +270,6 @@ def get_course_insights(course_id: int):
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-
-def _generate_course_insights(
-    course: dict, assignments: list, quizzes: list, full_context: dict, app_config: dict
-) -> dict:
-    """Generate AI insights for a specific course."""
-    try:
-        from openai import OpenAI
-    except ImportError:
-        return _fallback_course_insights(course)
-    
-    api_key = app_config.get("OPENAI_API_KEY")
-    if not api_key:
-        return _fallback_course_insights(course)
-    
-    # Build compact prompt
-    student_name = full_context.get('student', {}).get('name', 'Student')
-    progress = course.get('progress', 0)
-    avg_score = course.get('averageScore')
-    completed = course.get('completedActivities', 0)
-    total = course.get('totalActivities', 0)
-    
-    assignments_text = ""
-    if assignments:
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc)
-        lines = []
-        for a in assignments:
-            status = a.get('status', 'not submitted')
-            name = a.get('name', 'Unknown')
-            duedate_ts = a.get('duedate_ts', 0)
-            if duedate_ts:
-                due_dt = datetime.utcfromtimestamp(duedate_ts).replace(tzinfo=timezone.utc)
-                days_diff = (due_dt - now).days
-                if status == 'submitted':
-                    lines.append(f"- {name}: SUBMITTED ✅ (no action needed)")
-                elif days_diff < 0:
-                    lines.append(f"- {name}: NOT SUBMITTED, OVERDUE by {abs(days_diff)} days")
-                elif days_diff == 0:
-                    lines.append(f"- {name}: NOT SUBMITTED, DUE TODAY")
-                elif days_diff == 1:
-                    lines.append(f"- {name}: NOT SUBMITTED, DUE TOMORROW")
-                else:
-                    lines.append(f"- {name}: NOT SUBMITTED, due in {days_diff} days")
-            else:
-                lines.append(f"- {name}: {status}, no due date set")
-        assignments_text = "\n".join(lines)
-
-    quizzes_text = ""
-    if quizzes:
-        q_lines = []
-        for q in quizzes:
-            qname = q.get("name", "Unknown")
-            score = q.get("score")
-            max_score = q.get("maxScore")
-            pct = q.get("percentage")
-            if score is not None and max_score is not None:
-                q_lines.append(f"- {qname}: {score}/{max_score} ({pct}%)")
-            else:
-                q_lines.append(f"- {qname}: not graded")
-        quizzes_text = "\n".join(q_lines)
-
-    prompt = f"""Analyze this student's status in a specific course and provide personalized insights.
-
-STUDENT: {student_name}
-COURSE: {course.get('name', 'Unknown')} ({course.get('id', '')})
-PROGRESS: {progress}% ({completed}/{total} activities completed)
-AVERAGE SCORE: {avg_score if avg_score is not None else 'Not yet graded'}
-
-ASSIGNMENTS:
-{assignments_text if assignments_text else 'No assignments data available'}
-
-QUIZ RESULTS:
-{quizzes_text if quizzes_text else 'No quiz attempts recorded yet'}
-
-Generate a JSON response with:
-1. "insights": An array of 3-4 short, specific bullet points about the student's status in THIS course. Address the student directly with "you/your". Examples:
-   - "You've completed 3/5 lab modules"
-   - "You scored 6/10 on Quiz 1 — review the topics you missed"
-   - "Try completing the next assignment before the deadline"
-2. "study_tip": A single short, actionable study tip specific to this course and the student's current progress.
-
-Return ONLY valid JSON, no markdown, no extra text.
-"""
-    
-    try:
-        client = OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model=app_config.get("AI_MODEL", "gpt-4o-mini"),
-            messages=[
-                {"role": "system", "content": "You are NeoBright, a supportive AI learning coach. Always address the student directly using 'you' and 'your'. Be specific and actionable. Return ONLY valid JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.5,
-            max_tokens=400
-        )
-        
-        import json
-        raw = response.choices[0].message.content.strip()
-        # Strip markdown code fences if present
-        if raw.startswith('```'):
-            raw = raw.split('\n', 1)[1] if '\n' in raw else raw[3:]
-            if raw.endswith('```'):
-                raw = raw[:-3]
-            raw = raw.strip()
-        
-        result = json.loads(raw)
-        return {
-            "insights": result.get("insights", []),
-            "study_tip": result.get("study_tip", "Keep up the good work!")
-        }
-    
-    except Exception as e:
-        print(f"Course insights generation error: {e}")
-        return _fallback_course_insights(course)
-
-
-def _fallback_course_insights(course: dict) -> dict:
-    """Fallback when AI is unavailable."""
-    progress = course.get('progress', 0)
-    completed = course.get('completedActivities', 0)
-    total = course.get('totalActivities', 0)
-    name = course.get('name', 'this course')
-    
-    insights = [f"You've completed {completed}/{total} activities in {name}"]
-    if progress < 50:
-        insights.append("Your progress is below 50% - try to catch up this week")
-        tip = f"Set aside dedicated time to work through the remaining modules in {name}."
-    elif progress < 100:
-        insights.append(f"You're at {progress}% — keep going!")
-        tip = f"You're making good progress. Try to complete the next activity in {name} today."
-    else:
-        insights.append("Great job — you've completed all activities!")
-        tip = "Review the material to solidify your understanding before any exams."
-    
-    return {"insights": insights, "study_tip": tip}
 
 
 @ai_bp.route('/ai/insights', methods=['GET'])
@@ -800,13 +667,14 @@ def send_message(chat_id: str):
         previous_messages = fs.get_chat_messages(chat_id)
         conversation_history = previous_messages[-10:] if len(previous_messages) > 10 else previous_messages
         
-        # Generate AI response using chat-specific prompt with file context
-        ai_response = _generate_chat_response(
+        # Generate AI response using extracted chat service (with logging)
+        ai_response = generate_chat_response(
             ai_context_message,
             context_dict,
             conversation_history,
             chat_data.get("moodle_course_id"),
-            current_app.config
+            current_app.config,
+            user_id=firebase_uid,
         )
         
         # Save assistant message
@@ -840,6 +708,104 @@ def send_message(chat_id: str):
     
     except Exception as e:
         print(f"Error sending message: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@ai_bp.route('/ai/chats/<chat_id>/messages/stream', methods=['POST'])
+@firebase_required
+@ai_rate_limit
+def send_message_stream(chat_id: str):
+    """
+    POST /api/ai/chats/<chat_id>/messages/stream
+
+    Send a message and stream the AI response via SSE.
+    Text-only (no file upload — the sync endpoint handles files).
+
+    Request body (JSON):  { "message": "..." }
+
+    Response: text/event-stream with events:
+      data: {"type":"delta","content":"token..."}
+      data: {"type":"done","content":"full reply text"}
+    """
+    from flask import Response
+
+    try:
+        firebase_uid = g.firebase_uid
+        body = request.get_json(silent=True) or {}
+        user_message_content = body.get("message", "").strip()
+
+        if not user_message_content:
+            return jsonify({"error": "Message is required"}), 400
+
+        fs = FirestoreService()
+
+        # Verify chat exists and user owns it
+        chat_doc = fs.db.collection('ai_chats').document(chat_id).get()
+        if not chat_doc.exists:
+            return jsonify({"error": "Chat not found"}), 404
+        chat_data = chat_doc.to_dict()
+        if chat_data.get("user_id") != firebase_uid:
+            return jsonify({"error": "Access denied"}), 403
+
+        # Save user message
+        user_msg = ChatMessage(role="user", content=user_message_content)
+        fs.save_chat_message(chat_id, user_msg)
+        user_timestamp = datetime.utcnow()
+
+        # Get context
+        context_dict = _get_cached_ai_context(firebase_uid)
+        previous_messages = fs.get_chat_messages(chat_id)
+        conversation_history = previous_messages[-10:] if len(previous_messages) > 10 else previous_messages
+
+        # Capture these NOW — the generator runs outside app context
+        app_config = dict(current_app.config)
+        flask_app = current_app._get_current_object()
+
+        def generate_sse():
+            """Inner generator that streams SSE events then saves the final message."""
+            full_reply = ""
+
+            for chunk in stream_chat_response(
+                user_message_content,
+                context_dict,
+                conversation_history,
+                chat_data.get("moodle_course_id"),
+                app_config,
+                user_id=firebase_uid,
+                flask_app=flask_app,
+            ):
+                yield chunk
+
+                # Capture the full text from the done event
+                if '"type": "done"' in chunk or '"type":"done"' in chunk:
+                    import json as _json
+                    try:
+                        payload = _json.loads(chunk.removeprefix("data: ").strip())
+                        full_reply = payload.get("content", "")
+                    except Exception:
+                        pass
+
+            # After streaming completes, persist the assistant message
+            if full_reply:
+                assistant_msg = ChatMessage(role="assistant", content=full_reply)
+                fs.save_chat_message(chat_id, assistant_msg)
+                fs.db.collection('ai_chats').document(chat_id).update({
+                    "updated_at": datetime.utcnow()
+                })
+
+        return Response(
+            generate_sse(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",  # nginx pass-through
+            },
+        )
+
+    except Exception as e:
+        print(f"Error in stream endpoint: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
@@ -885,273 +851,42 @@ def delete_chat(chat_id: str):
         return jsonify({"error": str(e)}), 500
 
 
-def _generate_chat_response(
-    user_message: str,
-    context: dict,
-    conversation_history: list,
-    course_id: int | None,
-    app_config: dict
-) -> str:
+# ==================== TRACES (Phase 6) ====================
+
+@ai_bp.route('/ai/traces', methods=['GET'])
+@firebase_required
+def list_traces():
     """
-    Generate AI chat response using OpenAI.
-    
-    Includes student context and conversation history for personalized responses.
+    GET /api/ai/traces?limit=20&user_id=<uid>
+
+    Return recent agent traces stored by NeoBrightTracingProcessor.
+    Query params:
+        limit   – max documents (default 20, max 100)
+        user_id – filter by user (optional; if omitted returns caller's traces)
     """
     try:
-        from openai import OpenAI
-    except ImportError:
-        return _fallback_chat_response(user_message)
-    
-    api_key = app_config.get("OPENAI_API_KEY")
-    if not api_key:
-        return _fallback_chat_response(user_message)
-    
-    # Build system prompt with student context
-    assignments_text = _format_assignments_context(context.get('assignments', []))
-    quizzes_text = _format_quizzes_context(context.get('quizzes', []))
-    course_content_text = _format_active_course_content(course_id)
-    system_prompt = f"""You are NeoBright, a helpful AI learning assistant for university students.
+        firebase_uid = g.firebase_uid
+        fs = FirestoreService()
 
-STUDENT CONTEXT:
-- Name: {context.get('student', {}).get('name', 'Student')}
-- Overall Progress: {context.get('analytics', {}).get('overallProgress', 0)}%
-- Risk Level: {context.get('analytics', {}).get('riskLevel', 'unknown')}
-- Enrolled Courses: {len(context.get('courses', []))}
+        limit = min(int(request.args.get('limit', 20)), 100)
+        filter_uid = request.args.get('user_id', firebase_uid)
 
-{_format_courses_context(context.get('courses', []), course_id)}
-
-{course_content_text}
-
-{assignments_text}
-
-{quizzes_text}
-
-GUIDELINES:
-- If user asks you show them their progress, Don't start with "The student's progress is..." Instead, say "Your progress is..." etc.
-- Be encouraging, supportive, and helpful
-- Provide specific, actionable advice
-- Reference the student's actual courses and progress when relevant
-- Keep responses concise but thorough
-- If asked about grades or progress, use the provided context data to give specific numbers
-- If asked about due dates or deadlines, use the ASSIGNMENTS context above to give specific dates and names
-- IMPORTANT: Distinguish between SUBMITTED and NOT SUBMITTED assignments. If an assignment is marked as SUBMITTED, do NOT call it overdue or tell the student to submit it — it's already done
-- Only flag assignments as overdue if they are BOTH past due AND not submitted
-- Format responses using proper markdown for readability:
-  - Use ### for main section headers
-  - Use **bold** for emphasis
-  - Use - for bullet list items (always include the dash and a space)
-  - Use 1. 2. 3. for numbered/ordered lists
-  - Never write list items as bare text without a - or number prefix
-  - Use **Label:** Description format for definition-style items within lists
-- Always speak directly to the student using "you" and "your"
-- Avoid jargon or complex terminology; keep language simple and student-friendly
-
-QUIZ & LEARNING GUIDELINES:
-- When a student asks to be quizzed ("Quiz Me", "create a quiz", "test me", etc.):
-  - If COURSE CONTENT STRUCTURE is available above, use the section and module names to generate relevant quiz questions based on those topics
-  - If the student mentions a specific topic/section name from the COURSE CONTENT, create questions based on that topic's modules
-  - Only ask for uploaded materials if you truly have no course content context at all
-  - When a student uploads a file and asks you to quiz them on it, extract the key concepts and create 3-5 questions based on that content
-  - Make sure quiz questions are directly relevant to the provided material and not generic questions about the course
-  - When creating quiz questions, provide a mix of question types (e.g., multiple choice, short answer) and cover different aspects of the material (definitions, applications, implications)
-  - When displaying quiz questions, format them clearly with question numbers and options (if multiple choice)
-  - When displaying quiz results, provide explanations for correct and incorrect answers to enhance learning 
-  - Display the Quiz Questions and Answers beautifully using markdown and emojis for better engagement
-
-SUMMARIZATION & TOPIC EXPLANATION GUIDELINES:
-- When a student asks to summarize or explain a topic:
-  - If COURSE CONTENT STRUCTURE is available above, use the section/module names to identify what the topic covers
-  - Use the module names (lectures, labs, resources) listed under each section as context clues for what the topic teaches
-  - Explain based on your general knowledge of the subject matter, referencing the specific modules/lectures under that topic
-  - Do NOT ask the student to provide materials if you already have the course structure — use the module/lecture names as guidance
-  - Only ask for uploaded notes if the topic is highly specialized and you have zero course content context
-- Summarize concisely, focusing on key points and main ideas
-- For summaries, use numbered points for main ideas and bullet points for details
-- Summaries should be clear enough for a beginner to understand
-- If asked to summarize again, provide an even more concise version focusing on the absolute essentials
-- Never make up information not in the context
-- If asked anything that is not related to learning or courses, politely decline and steer back to academic topics
-- Always prioritize the student's learning and well-being
-- Current date: {datetime.utcnow().date().isoformat()}
-- Respond to the user's messages based on this context and the conversation history.
-"""
-
-    # Build messages array
-    messages = [{"role": "system", "content": system_prompt}]
-    
-    # Add conversation history
-    for msg in conversation_history:
-        messages.append({
-            "role": msg.get("role", "user"),
-            "content": msg.get("content", "")
-        })
-    
-    # Add current user message (if not already in history)
-    if not conversation_history or conversation_history[-1].get("content") != user_message:
-        messages.append({"role": "user", "content": user_message})
-    
-    try:
-        client = OpenAI(api_key=api_key)
-        
-        response = client.chat.completions.create(
-            model=app_config.get("AI_MODEL", "gpt-4o-mini"),
-            messages=messages,
-            temperature=app_config.get("AI_TEMPERATURE", 0.6),
-            max_tokens=app_config.get("AI_MAX_TOKENS", 500)
+        query = (
+            fs.db.collection('ai_traces')
+            .where('user_id', '==', filter_uid)
+            .order_by('started_at', direction='DESCENDING')
+            .limit(limit)
         )
-        
-        return response.choices[0].message.content
-    
+
+        traces = []
+        for doc in query.stream():
+            data = doc.to_dict()
+            data['id'] = doc.id
+            traces.append(data)
+
+        return jsonify({"traces": traces, "count": len(traces)}), 200
+
     except Exception as e:
-        print(f"OpenAI API error: {e}")
-        return _fallback_chat_response(user_message)
-
-
-def _format_courses_context(courses: list, active_course_id: int | None) -> str:
-    """Format courses for system prompt."""
-    if not courses:
-        return "No courses enrolled."
-    
-    lines = ["COURSES:"]
-    for course in courses:
-        marker = "→ " if (course.get("moodle_id") == active_course_id or course.get("id") == active_course_id) else "  "
-        score_str = f", Avg: {course.get('averageScore')}%" if course.get('averageScore') else ""
-        lines.append(
-            f"{marker}{course.get('name', 'Unknown')} - Progress: {course.get('progress', 0)}%{score_str}"
-        )
-    
-    return "\n".join(lines)
-
-
-def _format_active_course_content(course_id: int | None) -> str:
-    """Fetch and format sections/modules for the active course so the AI can discuss topics."""
-    if not course_id:
-        return ""
-    
-    try:
-        contents = MoodleService.get_course_contents(course_id)
-        if not contents:
-            return ""
-        
-        lines = ["COURSE CONTENT STRUCTURE (sections and modules for the active course):"]
-        for section in contents:
-            section_name = section.get("name", "Unnamed Section")
-            modules = section.get("modules", [])
-            if not modules:
-                continue
-            lines.append(f"\n  Section: {section_name}")
-            for mod in modules:
-                mod_name = mod.get("name", "Unnamed")
-                mod_type = mod.get("modname", "resource")
-                description = mod.get("description", "")
-                line = f"    - [{mod_type}] {mod_name}"
-                if description:
-                    # Truncate long descriptions to save tokens
-                    clean_desc = description[:200].replace("\n", " ").strip()
-                    line += f" — {clean_desc}"
-                lines.append(line)
-        
-        if len(lines) == 1:
-            return ""  # No actual content found
-        
-        lines.append("\nUse this structure to answer questions about specific sections/topics in this course.")
-        return "\n".join(lines)
-    
-    except Exception as e:
-        print(f"Error fetching course content for prompt: {e}")
-        return ""
-
-
-def _format_assignments_context(assignments: list) -> str:
-    """Format assignments with due dates and submission status for system prompt."""
-    if not assignments:
-        return "ASSIGNMENTS:\nNo assignments found."
-    
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc)
-    
-    pending_lines = ["PENDING ASSIGNMENTS (not yet submitted):"]
-    submitted_lines = ["SUBMITTED/COMPLETED ASSIGNMENTS:"]
-    has_pending = False
-    has_submitted = False
-    
-    for a in assignments:
-        name = a.get('name', 'Unknown')
-        course = a.get('course', 'Unknown')
-        duedate_ts = a.get('duedate_ts', 0)
-        status = a.get('status', 'not submitted')
-        
-        if duedate_ts:
-            due_dt = datetime.utcfromtimestamp(duedate_ts).replace(tzinfo=timezone.utc)
-            due_str = due_dt.strftime('%B %d, %Y at %I:%M %p')
-            
-            # Calculate days until due
-            days_diff = (due_dt - now).days
-            if days_diff < 0:
-                time_label = f"(was due {abs(days_diff)} days ago)"
-            elif days_diff == 0:
-                time_label = "(DUE TODAY)"
-            elif days_diff == 1:
-                time_label = "(DUE TOMORROW)"
-            else:
-                time_label = f"(due in {days_diff} days)"
-        else:
-            due_str = "No due date set"
-            time_label = ""
-        
-        if status == "submitted":
-            has_submitted = True
-            submitted_lines.append(f"  ✅ {name} [{course}] — Due: {due_str} — SUBMITTED")
-        else:
-            has_pending = True
-            if duedate_ts and days_diff < 0:
-                pending_lines.append(f"  ⚠️ {name} [{course}] — Due: {due_str} {time_label} — OVERDUE, NOT SUBMITTED")
-            else:
-                pending_lines.append(f"  📌 {name} [{course}] — Due: {due_str} {time_label}")
-    
-    result_lines = []
-    if has_pending:
-        result_lines.extend(pending_lines)
-    else:
-        result_lines.append("PENDING ASSIGNMENTS: None — all assignments are submitted! 🎉")
-    
-    result_lines.append("")  # blank separator
-    
-    if has_submitted:
-        result_lines.extend(submitted_lines)
-    
-    return "\n".join(result_lines)
-
-
-def _fallback_chat_response(user_message: str) -> str:
-    """Fallback response when AI is unavailable."""
-    return (
-        "I'm currently operating in limited mode. While I can't provide AI-powered responses right now, "
-        "here are some general tips:\n\n"
-        "• Check your course materials and syllabus for guidance\n"
-        "• Review your progress dashboard for insights\n"
-        "• Reach out to your instructor for specific questions\n\n"
-        "Please try again later for personalized AI assistance."
-    )
-
-
-def _format_quizzes_context(quizzes: list) -> str:
-    """Format quiz grades for the AI system prompt."""
-    if not quizzes:
-        return "QUIZ RESULTS:\nNo quiz attempts recorded yet."
-
-    lines = ["QUIZ RESULTS:"]
-    for q in quizzes:
-        name = q.get("name", "Unknown")
-        course = q.get("course", "")
-        score = q.get("score")
-        max_score = q.get("maxScore")
-        pct = q.get("percentage")
-        status = q.get("status", "not graded")
-
-        if score is not None and max_score is not None:
-            lines.append(f"  - {name} [{course}]: {score}/{max_score} ({pct}%) — {status}")
-        else:
-            lines.append(f"  - {name} [{course}]: {status}")
-
-    return "\n".join(lines)
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500

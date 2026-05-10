@@ -1,6 +1,5 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { X, ChevronDown, Sparkles, BookOpen, BarChart3, Clock, AlertCircle, Loader2 } from 'lucide-react';
-import { useAuth } from '../auth/AuthContext';
+import { useEffect, useState, useRef } from 'react';
+import { X, Sparkles, BookOpen, BarChart3, Clock, AlertCircle, Loader2 } from 'lucide-react';
 import ChatMessage from './ChatMessage';
 import ChatInput from './ChatInput';
 import { aiChatService, ChatSession, ChatMessage as IChatMessage } from '../services/aiChatService';
@@ -17,60 +16,69 @@ interface AIChatPanelProps {
   isOpen: boolean;
   onClose: () => void;
   initialMessage?: string;
+  initialMessageMode?: 'send' | 'draft';
 }
 
-export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage }: AIChatPanelProps) {
-  const { user } = useAuth();
+export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage, initialMessageMode = 'send' }: AIChatPanelProps) {
   const [chatSession, setChatSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<IChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [sendingMessage, setSendingMessage] = useState(false);
   const [processingFile, setProcessingFile] = useState(false);
+  const [waitingForStream, setWaitingForStream] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isRateLimited, setIsRateLimited] = useState(false);
   const [rateLimitCountdown, setRateLimitCountdown] = useState(0);
   const [selectedAction, setSelectedAction] = useState<string | null>(null);
-  const [lastUserId, setLastUserId] = useState<string | null>(null);
   const lastSentPrompt = useRef<string | null>(null);
+  const openCourseIdRef = useRef<number | undefined>(undefined);
+  const initRunIdRef = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const quickActionsRef = useRef<HTMLDivElement>(null);
 
-  // Detect user/session change and create new chat
+  // Freeze courseId for the lifetime of an open panel to avoid re-initializing
+  // chat (and clobbering optimistic messages) if courseId changes mid-stream.
   useEffect(() => {
-    if (user?.uid && user.uid !== lastUserId) {
-      // User has changed or logged in - clear all chat sessions
-      const keysToRemove = Object.keys(localStorage).filter(k => k.startsWith('activeChatId'));
-      keysToRemove.forEach(k => localStorage.removeItem(k));
-      setChatSession(null);
-      setMessages([]);
-      setLastUserId(user.uid);
+    if (isOpen) {
+      openCourseIdRef.current = courseId;
+    } else {
+      openCourseIdRef.current = undefined;
     }
-  }, [user?.uid]);
+  }, [isOpen, courseId]);
 
   // Load or create chat session on mount
   useEffect(() => {
+    if (!isOpen) return;
+
+    const runId = ++initRunIdRef.current;
+    let cancelled = false;
+
     const initChat = async () => {
       try {
         setLoading(true);
         setError(null);
 
+        const effectiveCourseId = openCourseIdRef.current;
+
         // Use course-specific localStorage key so each course has its own chat
-        const storageKey = courseId ? `activeChatId_${courseId}` : 'activeChatId';
+        const storageKey = effectiveCourseId ? `activeChatId_${effectiveCourseId}` : 'activeChatId';
         const cachedChatId = localStorage.getItem(storageKey);
 
         if (cachedChatId) {
           // Load existing chat
           try {
             const chat = await aiChatService.getChat(cachedChatId);
+            if (cancelled || initRunIdRef.current !== runId) return;
             setChatSession(chat);
             setMessages(chat.messages || []);
           } catch {
             // Chat not found (deleted/expired) — create a new one
             localStorage.removeItem(storageKey);
             const newChat = await aiChatService.createChat({
-              courseId,
-              title: courseId ? `Course ${courseId} Chat` : 'Dashboard Chat'
+              courseId: effectiveCourseId,
+              title: effectiveCourseId ? `Course ${effectiveCourseId} Chat` : 'Dashboard Chat'
             });
+            if (cancelled || initRunIdRef.current !== runId) return;
             setChatSession(newChat);
             const welcomeMessage: IChatMessage = {
               role: 'assistant',
@@ -83,9 +91,10 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
         } else {
           // Create new chat
           const newChat = await aiChatService.createChat({
-            courseId,
-            title: courseId ? `Course ${courseId} Chat` : 'Dashboard Chat'
+            courseId: effectiveCourseId,
+            title: effectiveCourseId ? `Course ${effectiveCourseId} Chat` : 'Dashboard Chat'
           });
+          if (cancelled || initRunIdRef.current !== runId) return;
           setChatSession(newChat);
           
           // Add welcome message for fresh chat
@@ -99,19 +108,23 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
           localStorage.setItem(storageKey, newChat.chatId);
         }
       } catch (err: any) {
+        if (cancelled || initRunIdRef.current !== runId) return;
         setError(err.message || 'Failed to load chat');
       } finally {
+        if (cancelled || initRunIdRef.current !== runId) return;
         setLoading(false);
       }
     };
 
-    if (isOpen) {
-      initChat();
-    }
-  }, [isOpen, courseId]);
+    initChat();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
 
   // Auto-send initial message when provided and chat is ready (single effect, ref-guarded)
   useEffect(() => {
+    if (initialMessageMode !== 'send') return;
     if (
       initialMessage &&
       chatSession &&
@@ -122,7 +135,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
       lastSentPrompt.current = initialMessage;
       handleSendMessage(initialMessage);
     }
-  }, [initialMessage, chatSession, loading]);
+  }, [initialMessageMode, initialMessage, chatSession, loading, sendingMessage]);
 
   // Auto-scroll to latest message
   useEffect(() => {
@@ -175,17 +188,82 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
         setProcessingFile(true);
       }
 
-      // Send to backend with file if provided
-      const response = await aiChatService.sendMessage(chatSession.chatId, userMessage, file);
+      // ── Streaming path (text-only, no file) ──────────
+      if (!file) {
+        setWaitingForStream(true);
 
-      setProcessingFile(false);
+        try {
+          await aiChatService.sendMessageStream(chatSession.chatId, userMessage, {
+            onDelta: (delta) => {
+              setWaitingForStream(false);
+              setMessages((prev) => {
+                const last = prev[prev.length - 1];
+                if (last && last.role === 'assistant') {
+                  // Append to existing assistant message
+                  const updated = [...prev];
+                  updated[updated.length - 1] = { ...last, content: last.content + delta };
+                  return updated;
+                }
+                // No assistant message yet — add one with this first token
+                return [...prev, { role: 'assistant', content: delta, timestamp: new Date().toISOString() }];
+              });
+            },
+            onDone: (fullText) => {
+              setMessages((prev) => {
+                const updated = [...prev];
+                const last = updated[updated.length - 1];
+                if (last && last.role === 'assistant') {
+                  updated[updated.length - 1] = {
+                    ...last,
+                    content: fullText,
+                    timestamp: new Date().toISOString(),
+                  };
+                }
+                return updated;
+              });
+            },
+            onError: (err) => {
+              setError(err.message || 'Streaming failed');
+              // Remove the empty assistant placeholder
+              setMessages((prev) => {
+                const updated = [...prev];
+                if (updated[updated.length - 1]?.role === 'assistant' && !updated[updated.length - 1]?.content) {
+                  return updated.slice(0, -1);
+                }
+                return updated;
+              });
+            },
+          });
+        } catch (streamErr: any) {
+          // Streaming failed — fall back to sync endpoint
+          console.warn('Stream failed, falling back to sync:', streamErr.message);
+          // Remove the empty assistant placeholder
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last?.role === 'assistant' && !last.content) return prev.slice(0, -1);
+            return prev;
+          });
 
-      // Replace optimistic user msg with backend response (has file metadata), add AI response
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        response.userMessage,
-        response.assistantMessage
-      ]);
+          const response = await aiChatService.sendMessage(chatSession.chatId, userMessage);
+          setMessages((prev) => {
+            // Replace user msg with backend version and add assistant msg
+            const withoutLastUser = prev.slice(0, -1);
+            return [...withoutLastUser, response.userMessage, response.assistantMessage];
+          });
+        }
+      } else {
+        // ── File upload path (non-streaming) ─────────
+        const response = await aiChatService.sendMessage(chatSession.chatId, userMessage, file);
+
+        setProcessingFile(false);
+
+        // Replace optimistic user msg with backend response (has file metadata), add AI response
+        setMessages((prev) => [
+          ...prev.slice(0, -1),
+          response.userMessage,
+          response.assistantMessage
+        ]);
+      }
     } catch (err: any) {
       const errorMsg = err?.response?.data?.message || err.message || 'Failed to send message';
 
@@ -213,6 +291,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
     } finally {
       setSendingMessage(false);
       setProcessingFile(false);
+      setWaitingForStream(false);
     }
   };
 
@@ -358,8 +437,9 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
                   />
                 );
               })}
-              {/* Thinking indicator while AI is generating response */}
-              {(sendingMessage || processingFile) && (
+              {/* Thinking indicator — show only for file processing.
+                  Text messages use streaming, so the reply appears token-by-token. */}
+              {(processingFile || waitingForStream) && (
                 <ChatMessage
                   role="assistant"
                   content=""
@@ -378,6 +458,7 @@ export default function AIChatPanel({ courseId, isOpen, onClose, initialMessage 
           onSend={handleSendMessage}
           isLoading={sendingMessage}
           isRateLimited={isRateLimited}
+          draftMessage={initialMessageMode === 'draft' ? initialMessage : undefined}
           rateLimitMessage={
             isRateLimited && rateLimitCountdown > 0
               ? `Please wait ${rateLimitCountdown}s before sending another message`

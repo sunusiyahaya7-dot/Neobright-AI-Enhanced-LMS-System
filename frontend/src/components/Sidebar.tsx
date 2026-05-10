@@ -1,11 +1,10 @@
-import React, { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { logout } from '../services/authService';
 import { 
   Home, 
   BookOpen, 
   BarChart3,
-  Zap,
   Brain,
   Lightbulb,
   Moon,
@@ -20,28 +19,42 @@ export default function Sidebar() {
   const location = useLocation();
   const navigate = useNavigate();
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [isDark, setIsDark] = useState(document.documentElement.classList.contains('dark'));
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const toggleDarkMode = () => {
     if (document.documentElement.classList.contains('dark')) {
       document.documentElement.classList.remove('dark');
       localStorage.setItem('theme', 'light');
-      setIsDark(false);
     } else {
       document.documentElement.classList.add('dark');
       localStorage.setItem('theme', 'dark');
-      setIsDark(true);
     }
   };
 
   const handleLogout = async () => {
     try {
+      setIsLoggingOut(true);
       await logout();
       navigate('/login');
     } catch (error) {
       console.error('Logout failed:', error);
+    } finally {
+      setIsLoggingOut(false);
+      setShowLogoutConfirm(false);
     }
   };
+
+  useEffect(() => {
+    if (!showLogoutConfirm) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowLogoutConfirm(false);
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showLogoutConfirm]);
 
   const isActive = (path: string) => location.pathname === path;
 
@@ -57,7 +70,8 @@ export default function Sidebar() {
   ];
 
   return (
-    <aside className={`${
+    <>
+    <aside className={`$
       isCollapsed ? 'w-20' : 'w-64'
     } bg-white dark:bg-[#1A1C20] border-r border-gray-200 dark:border-[#2A2D32] h-screen flex flex-col transition-all duration-300 sticky top-0`}>
       {/* Logo */}
@@ -149,7 +163,7 @@ export default function Sidebar() {
         </Link>
 
         <button
-          onClick={handleLogout}
+          onClick={() => setShowLogoutConfirm(true)}
           className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all ${
             isCollapsed ? 'justify-center' : ''
           }`}
@@ -160,5 +174,40 @@ export default function Sidebar() {
         </button>
       </div>
     </aside>
+
+    {showLogoutConfirm && (
+      <>
+        <div
+          className="fixed inset-0 bg-black/40 z-40"
+          onClick={() => !isLoggingOut && setShowLogoutConfirm(false)}
+        />
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#1A1C20] rounded-2xl p-6 shadow-2xl max-w-sm w-full border border-gray-200 dark:border-[#2A2D32]">
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white">Log out?</h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mt-2">
+              Are you sure you want to log out?
+            </p>
+
+            <div className="flex items-center gap-3 justify-end mt-6">
+              <button
+                onClick={() => setShowLogoutConfirm(false)}
+                disabled={isLoggingOut}
+                className="px-4 py-2 rounded-xl bg-gray-100 dark:bg-[#111418] text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-[#1E2025] transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleLogout}
+                disabled={isLoggingOut}
+                className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold transition-colors disabled:opacity-50"
+              >
+                {isLoggingOut ? 'Logging out…' : 'Log out'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </>
+    )}
+    </>
   );
 }

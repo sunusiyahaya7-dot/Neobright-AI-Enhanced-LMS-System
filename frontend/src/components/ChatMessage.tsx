@@ -126,13 +126,21 @@ function renderContent(text: string): React.ReactNode[] {
       return;
     }
 
-    // Numbered list: 1. or 1)
-    if (/^\d+[.)]\s/.test(trimmed)) {
+    // Numbered list: 1. or 1) (preserve explicit numbering)
+    const orderedMatch = trimmed.match(/^(\d+)[.)]\s+(.+)$/);
+    if (orderedMatch) {
+      const n = parseInt(orderedMatch[1], 10);
+      const content = orderedMatch[2];
       if (listType !== 'ol') {
         flushList();
         listType = 'ol';
       }
-      listItems.push(<li key={`li-${i}`} className="text-sm leading-relaxed">{formatInline(trimmed.replace(/^\d+[.)]\s+/, ''))}</li>);
+      // Using <li value={n}> preserves numbering even when a list starts at 2, 3, ...
+      listItems.push(
+        <li key={`li-${i}`} value={Number.isFinite(n) ? n : undefined} className="text-sm leading-relaxed">
+          {formatInline(content)}
+        </li>
+      );
       return;
     }
 

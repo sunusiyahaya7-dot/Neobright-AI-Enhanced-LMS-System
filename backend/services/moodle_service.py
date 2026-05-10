@@ -544,7 +544,6 @@ class MoodleService:
             )
             params = {
                 "cmid": cmid,
-                "userid": moodle_user_id,
                 "completed": 1 if is_complete else 0
             }
             

@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import AIChatPanel from '../components/AIChatPanel';
 import api from '../api/client';
-import { useAuth } from "../auth/AuthContext";
 import {
   analyticsService,
   AnalyticsOverview,
-  CourseAnalytics,
+  ProgressGranularity,
+  ProgressTrendPoint,
 } from "../services/analyticsService";
 import { getCourses, getCourseAssignments } from "../services/moodleService";
 import { progressService } from "../services/progressService";
@@ -24,8 +24,6 @@ import { Link } from "react-router-dom";
 import {
   LineChart,
   Line,
-  AreaChart,
-  Area,
   BarChart,
   Bar,
   PieChart,
@@ -37,8 +35,6 @@ import {
   Tooltip,
   ResponsiveContainer,
   Legend,
-  RadialBarChart,
-  RadialBar,
 } from "recharts";
 
 
@@ -56,7 +52,6 @@ interface AssignmentStats {
 }
 
 export default function Analytics() {
-  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [analytics, setAnalytics] = useState<AnalyticsOverview | null>(null);
   const [courses, setCourses] = useState<Course[]>([]);
@@ -67,17 +62,61 @@ export default function Analytics() {
     total: 0,
   });
   const [progressData, setProgressData] = useState<any[]>([]);
-  const [weeklyProgressData, setWeeklyProgressData] = useState<any[]>([]);
-  const [averageVelocity, setAverageVelocity] = useState<number>(0);
+  const [trendCourseId, setTrendCourseId] = useState<number | null>(null);
+  const [trendGranularity, setTrendGranularity] = useState<ProgressGranularity>("week");
+  const [trendYear, setTrendYear] = useState(() => new Date().getFullYear());
+  const [trendMonth, setTrendMonth] = useState(() => new Date().getMonth() + 1);
+  const [trendLoading, setTrendLoading] = useState(false);
+  const [trendData, setTrendData] = useState<ProgressTrendPoint[]>([]);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatPrompt, setChatPrompt] = useState<string | undefined>(undefined);
   const [aiInsight, setAiInsight] = useState<{ summary: string; actions: { title: string; description: string; priority: string }[]; strengths: string[] } | null>(null);
   const [insightLoading, setInsightLoading] = useState(false);
 
+  // Per-visit chat: keep history while on this page, but start fresh when leaving and returning.
+  useEffect(() => {
+    const storageKey = 'activeChatId_0';
+    return () => {
+      localStorage.removeItem(storageKey);
+    };
+  }, []);
+
   useEffect(() => {
     loadAnalytics();
     fetchAiInsight();
   }, []);
+
+  useEffect(() => {
+    if (!trendCourseId) return;
+    void loadTrend(trendCourseId);
+  }, [trendCourseId, trendGranularity, trendYear, trendMonth]);
+
+  const loadTrend = async (courseId: number) => {
+    try {
+      setTrendLoading(true);
+
+      const options: {
+        granularity: ProgressGranularity;
+        year?: number;
+        month?: number;
+      } = { granularity: trendGranularity };
+
+      if (trendGranularity !== "week") {
+        options.year = trendYear;
+      }
+      if (trendGranularity === "month") {
+        options.month = trendMonth;
+      }
+
+      const points = await analyticsService.getCourseProgressTrend(courseId, options);
+      setTrendData(points || []);
+    } catch (error) {
+      console.error("Failed to load progress trend:", error);
+      setTrendData([]);
+    } finally {
+      setTrendLoading(false);
+    }
+  };
 
   const fetchAiInsight = async (force = false) => {
     try {
@@ -106,20 +145,9 @@ export default function Analytics() {
       setCourses(courseList);
       setProgressData(progressOverview);
 
-      // Set weekly progress data from first course's analytics
-      if (analyticsData?.courses && analyticsData.courses.length > 0) {
-        const weeklyData = analyticsData.courses[0].weeklyProgress || [];
-        setWeeklyProgressData(weeklyData.length > 0 ? weeklyData : []);
-        console.log("Weekly Progress Data:", weeklyData);
-
-        // Calculate average velocity from all courses
-        const velocities = analyticsData.courses.map((c) => c.velocity || 0);
-        const avgVel =
-          velocities.length > 0
-            ? velocities.reduce((a, b) => a + b, 0) / velocities.length
-            : 0;
-        setAverageVelocity(Math.round(avgVel * 100) / 100);
-      }
+      const primaryCourseId =
+        analyticsData?.courses?.[0]?.courseId ?? courseList?.[0]?.id ?? null;
+      setTrendCourseId(primaryCourseId);
 
       const assignmentPromises = courseList.map((course: Course) =>
         getCourseAssignments(course.id).catch(() => ({ assignments: [] })),
@@ -315,19 +343,79 @@ export default function Analytics() {
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="bg-white dark:bg-[#1A1C20] rounded-xl p-6 border border-gray-200 dark:border-[#2A2D32]">
-                <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-6">
-                  Learning Progress by Week
-                </h3>
+                <div className="flex items-center justify-between gap-3 mb-6">
+                  <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+                    Learning Progress by{" "}
+                    {trendGranularity === "week"
+                      ? "Week"
+                      : trendGranularity === "month"
+                        ? "Month"
+                        : "Year"}
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={trendGranularity}
+                      onChange={(e) => setTrendGranularity(e.target.value as ProgressGranularity)}
+                      className="h-9 rounded-lg border border-gray-200 dark:border-[#2A2D32] bg-white dark:bg-[#0F1115] px-3 text-sm text-gray-900 dark:text-white"
+                      aria-label="Progress view"
+                    >
+                      <option value="week">Weekly</option>
+                      <option value="month">Monthly</option>
+                      <option value="year">Yearly</option>
+                    </select>
+
+                    {trendGranularity === "month" && (
+                      <select
+                        value={trendMonth}
+                        onChange={(e) => setTrendMonth(Number(e.target.value))}
+                        className="h-9 rounded-lg border border-gray-200 dark:border-[#2A2D32] bg-white dark:bg-[#0F1115] px-3 text-sm text-gray-900 dark:text-white"
+                        aria-label="Month"
+                      >
+                        <option value={1}>Jan</option>
+                        <option value={2}>Feb</option>
+                        <option value={3}>Mar</option>
+                        <option value={4}>Apr</option>
+                        <option value={5}>May</option>
+                        <option value={6}>Jun</option>
+                        <option value={7}>Jul</option>
+                        <option value={8}>Aug</option>
+                        <option value={9}>Sep</option>
+                        <option value={10}>Oct</option>
+                        <option value={11}>Nov</option>
+                        <option value={12}>Dec</option>
+                      </select>
+                    )}
+
+                    {(trendGranularity === "month" || trendGranularity === "year") && (
+                      <select
+                        value={trendYear}
+                        onChange={(e) => setTrendYear(Number(e.target.value))}
+                        className="h-9 rounded-lg border border-gray-200 dark:border-[#2A2D32] bg-white dark:bg-[#0F1115] px-3 text-sm text-gray-900 dark:text-white"
+                        aria-label="Year"
+                      >
+                        {Array.from({ length: 6 }, (_, i) => new Date().getFullYear() - i).map(
+                          (y) => (
+                            <option key={y} value={y}>
+                              {y}
+                            </option>
+                          ),
+                        )}
+                      </select>
+                    )}
+                  </div>
+                </div>
                 <ResponsiveContainer width="100%" height={300}>
                   <LineChart
                     data={
-                      weeklyProgressData && weeklyProgressData.length > 0
-                        ? weeklyProgressData
-                        : [{ week: "No Data", progress: 0 }]
+                      trendData && trendData.length > 0
+                        ? trendData
+                        : trendLoading
+                          ? [{ label: "Loading", progress: 0 }]
+                          : [{ label: "No Data", progress: 0 }]
                     }
                   >
                     <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                    <XAxis dataKey="week" />
+                    <XAxis dataKey="label" />
                     <YAxis />
                     <Tooltip />
                     <Line

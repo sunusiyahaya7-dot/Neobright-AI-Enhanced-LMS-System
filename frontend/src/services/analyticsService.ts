@@ -5,6 +5,13 @@ export interface WeeklyProgress {
   progress: number;
 }
 
+export type ProgressGranularity = 'week' | 'month' | 'year';
+
+export interface ProgressTrendPoint {
+  label: string;
+  progress: number;
+}
+
 export interface Engagement {
   lastActive: string | null;
   inactiveDays: number;
@@ -55,6 +62,25 @@ class AnalyticsService {
    */
   async getRiskAssessment(courseId: number): Promise<RiskAssessment> {
     const response = await api.get<RiskAssessment>(`/analytics/risk/${courseId}`);
+    return response.data;
+  }
+
+  /**
+   * Get progress trend for a course grouped by week/month/year.
+   */
+  async getCourseProgressTrend(
+    courseId: number,
+    options: { granularity: ProgressGranularity; year?: number; month?: number },
+  ): Promise<ProgressTrendPoint[]> {
+    const params = new URLSearchParams();
+    params.set('granularity', options.granularity);
+    if (typeof options.year === 'number') params.set('year', String(options.year));
+    if (typeof options.month === 'number') params.set('month', String(options.month));
+
+    const qs = params.toString();
+    const response = await api.get<ProgressTrendPoint[]>(
+      `/analytics/course/${courseId}/progress-trend${qs ? `?${qs}` : ''}`,
+    );
     return response.data;
   }
 }

@@ -51,6 +51,10 @@ def create_app():
     app.register_blueprint(grades_bp)
     app.register_blueprint(quiz_bp)
 
+    # ── Phase 6: Agent tracing ──
+    from services.agents.tracing import setup_tracing
+    setup_tracing()
+
     # Simple health check route
     @app.route("/health", methods=["GET"])
     def health():

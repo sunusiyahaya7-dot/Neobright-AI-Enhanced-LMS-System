@@ -18,8 +18,8 @@ class AiRateLimitService:
     logger = logging.getLogger(__name__)
     
     # Configuration
-    MAX_CALLS_PER_MINUTE = 2  # Max 2 calls per minute per user
-    MAX_CALLS_PER_HOUR = 20   # Max 20 calls per hour per user
+    MAX_CALLS_PER_MINUTE = 6  # Max 6 calls per minute per user
+    MAX_CALLS_PER_HOUR = 30    # Max 30 calls per hour per user
     
     @staticmethod
     def check_rate_limit(user_id: str, endpoint: str) -> tuple[bool, Optional[str]]:

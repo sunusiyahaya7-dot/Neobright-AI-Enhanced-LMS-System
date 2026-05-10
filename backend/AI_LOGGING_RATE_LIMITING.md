@@ -31,8 +31,8 @@
 **Purpose:** Prevent abuse by limiting AI API calls per user.
 
 **Limits:**
-- **2 calls per minute** per user
-- **20 calls per hour** per user
+- **6 calls per minute** per user
+- **30 calls per hour** per user
 
 **How it Works:**
 1. Stores rate limit data in Firestore (`ai_rate_limits` collection)
@@ -104,7 +104,10 @@ Run: `python test_logging_rate_limit.py`
 1. Open `test_rate_limit.rest` in VS Code
 2. Click "Send Request" for Call 1 (✅ should work)
 3. Click "Send Request" for Call 2 (✅ should work)
-4. Click "Send Request" for Call 3 (❌ should fail with 429)
+4. Click "Send Request" for Call 3 (✅ should work)
+5. Click "Send Request" for Call 4 (✅ should work)
+6. Click "Send Request" for Call 5 (✅ should work)
+7. Click "Send Request" for Call 6 (❌ should fail with 429)
 
 **Expected Response (Call 3):**
 ```json
@@ -165,8 +168,8 @@ print(stats)
 ### Rate Limits
 Edit in `ai_rate_limit_service.py`:
 ```python
-MAX_CALLS_PER_MINUTE = 2  # Adjust as needed
-MAX_CALLS_PER_HOUR = 20   # Adjust as needed
+MAX_CALLS_PER_MINUTE = 6  # Adjust as needed
+MAX_CALLS_PER_HOUR = 30   # Adjust as needed
 ```
 
 ### Logging
@@ -195,7 +198,7 @@ MAX_CALLS_PER_HOUR = 20   # Adjust as needed
 
 I now have:
 - ✅ Full logging of AI API calls (tokens, time, errors)
-- ✅ Rate limiting (2/min, 20/hour per user)
+- ✅ Rate limiting (6/min, 30/hour per user)
 - ✅ Firestore-backed tracking
 - ✅ Usage analytics capabilities
 - ✅ Comprehensive tests

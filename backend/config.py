@@ -20,7 +20,7 @@ class Config:
     # OpenAI API Configuration (Phase 1: AI Insights)
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
     AI_MODEL = os.getenv("AI_MODEL", "gpt-4o-mini")
-    AI_MAX_TOKENS = int(os.getenv("AI_MAX_TOKENS", 500))
+    AI_MAX_TOKENS = int(os.getenv("AI_MAX_TOKENS", 2000))
     AI_TEMPERATURE = float(os.getenv("AI_TEMPERATURE", 0.6))
     
     # Backend URL for generating absolute file proxy links
