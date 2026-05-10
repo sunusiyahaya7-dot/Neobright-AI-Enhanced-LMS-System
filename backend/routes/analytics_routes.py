@@ -2,7 +2,7 @@
 Analytics Routes for NeoBright LMS.
 Provides rule-based learning analytics endpoints.
 """
-from flask import Blueprint, jsonify, g
+from flask import Blueprint, jsonify, g, request
 from auth.firebase_auth import firebase_required
 from services.analytics_service import AnalyticsService
 from services.moodle_service import MoodleService
@@ -164,6 +164,55 @@ def get_risk_level(course_id):
     
     except Exception as e:
         print(f"Error getting risk level: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@analytics_bp.route('/analytics/course/<int:course_id>/progress-trend', methods=['GET'])
+@firebase_required
+def get_course_progress_trend(course_id: int):
+    """Get progress trend for a course grouped by week/month/year.
+
+    Query params:
+    - granularity: week | month | year (default: week)
+    - year: required for month/year
+    - month: required for month (1-12)
+
+    Returns:
+    [
+        {"label": "2026-W19", "progress": 42.5},
+        {"label": "2026-W20", "progress": 48.0}
+    ]
+    """
+    try:
+        firebase_uid = g.firebase_uid
+
+        granularity = (request.args.get('granularity') or 'week').lower()
+        year = request.args.get('year', type=int)
+        month = request.args.get('month', type=int)
+
+        if granularity not in ['week', 'month', 'year']:
+            return jsonify({"error": "Invalid granularity", "details": "Use week, month, or year"}), 400
+
+        if granularity == 'month' and (year is None or month is None):
+            return jsonify({"error": "Missing parameters", "details": "month view requires year and month"}), 400
+
+        if granularity == 'year' and year is None:
+            return jsonify({"error": "Missing parameters", "details": "year view requires year"}), 400
+
+        points = AnalyticsService.compute_progress_trend(
+            firebase_uid,
+            course_id,
+            granularity=granularity,  # type: ignore[arg-type]
+            year=year,
+            month=month,
+        )
+
+        return jsonify(points), 200
+
+    except Exception as e:
+        print(f"Error getting progress trend: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500

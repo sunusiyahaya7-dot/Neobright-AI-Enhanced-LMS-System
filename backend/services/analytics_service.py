@@ -2,14 +2,186 @@
 Learning Analytics Service for NeoBright LMS.
 Computes rule-based analytics from progress data.
 """
-from typing import Dict, List, Optional
-from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Literal
+from datetime import datetime, timedelta, date
+from calendar import monthrange
 from services.firestore_service import FirestoreService
 from services.progress_service import ProgressService
 
 
 class AnalyticsService:
     """Service for computing learning analytics."""
+
+    Granularity = Literal["week", "month", "year"]
+
+    @staticmethod
+    def compute_progress_trend(
+        firebase_uid: str,
+        course_id: int,
+        granularity: "AnalyticsService.Granularity" = "week",
+        *,
+        year: Optional[int] = None,
+        month: Optional[int] = None,
+    ) -> List[Dict]:
+        """Compute learning progress trend grouped by week, month, or year.
+
+        Returns a list of points:
+        [
+            {"label": "2026-W19", "progress": 42.5},
+            {"label": "2026-W20", "progress": 48.0},
+        ]
+
+        Notes:
+        - Uses Firestore user-marked completions timestamps when available.
+        - Scales to match the current cached course progress when the requested
+          period includes "today".
+        - Falls back to a simple linear trend if no timestamped completions exist.
+        """
+
+        def start_of_week(d: date) -> date:
+            # Monday as the first day of the week
+            return d - timedelta(days=d.weekday())
+
+        def clamp_int(v: Optional[int], *, min_value: int, max_value: int) -> Optional[int]:
+            if v is None:
+                return None
+            try:
+                v_int = int(v)
+            except Exception:
+                return None
+            if v_int < min_value or v_int > max_value:
+                return None
+            return v_int
+
+        try:
+            cached_progress = ProgressService.get_cached_course_progress(firebase_uid, course_id)
+            if not cached_progress:
+                return []
+
+            total_activities = int(cached_progress.get("total") or 0)
+            current_progress = float(cached_progress.get("progress") or 0.0)
+
+            # Build completion timeline from Firestore (user-marked)
+            completion_dates: List[datetime] = []
+            try:
+                fs = FirestoreService()
+                activities_ref = (
+                    fs.db.collection("completions")
+                    .document(firebase_uid)
+                    .collection("courses")
+                    .document(str(course_id))
+                    .collection("activities")
+                )
+                docs = activities_ref.where("isComplete", "==", True).stream()
+                for doc in docs:
+                    data = doc.to_dict() or {}
+                    dt = data.get("completedAt")
+                    if isinstance(dt, datetime):
+                        # Normalize timezone-aware to naive for comparisons
+                        if dt.tzinfo is not None:
+                            dt = dt.replace(tzinfo=None)
+                        completion_dates.append(dt)
+            except Exception:
+                # Non-fatal: trend will fall back to linear below
+                completion_dates = []
+
+            completion_dates.sort()
+
+            today = datetime.utcnow().date()
+
+            granularity = (granularity or "week").lower()  # type: ignore[assignment]
+            if granularity not in ("week", "month", "year"):
+                return []
+
+            # Determine bucket boundaries (inclusive end dates)
+            boundaries: List[tuple[str, date, date]] = []  # (label, start_date, end_date)
+
+            if granularity == "week":
+                # Last 5 weeks including the current week
+                current_week_start = start_of_week(today)
+                week_starts = [current_week_start - timedelta(weeks=i) for i in range(4, -1, -1)]
+                for ws in week_starts:
+                    we = ws + timedelta(days=6)
+                    iso = ws.isocalendar()
+                    label = f"{iso.year}-W{iso.week:02d}"
+                    boundaries.append((label, ws, we))
+
+            elif granularity == "month":
+                year = clamp_int(year, min_value=1970, max_value=2100)
+                month = clamp_int(month, min_value=1, max_value=12)
+                if year is None or month is None:
+                    return []
+
+                first = date(year, month, 1)
+                last = date(year, month, monthrange(year, month)[1])
+
+                ws = start_of_week(first)
+                idx = 1
+                while ws <= last:
+                    we = min(ws + timedelta(days=6), last)
+                    label = f"Wk {idx}"
+                    boundaries.append((label, ws, we))
+                    idx += 1
+                    ws = ws + timedelta(weeks=1)
+
+            else:  # year
+                year = clamp_int(year, min_value=1970, max_value=2100)
+                if year is None:
+                    return []
+                for m in range(1, 13):
+                    start = date(year, m, 1)
+                    end = date(year, m, monthrange(year, m)[1])
+                    label = start.strftime("%b")
+                    boundaries.append((label, start, end))
+
+            if not boundaries or total_activities <= 0:
+                # No way to compute percent; still return a stable shape if possible
+                return [{"label": b[0], "progress": 0.0} for b in boundaries]
+
+            # Raw trend from timestamped completions
+            def count_completions_up_to(end_inclusive: date) -> int:
+                # completion_dates is sorted
+                c = 0
+                for dt in completion_dates:
+                    if dt.date() <= end_inclusive:
+                        c += 1
+                    else:
+                        break
+                return c
+
+            raw_points: List[Dict] = []
+            for label, _start, end in boundaries:
+                completed = count_completions_up_to(end)
+                completed = max(0, min(completed, total_activities))
+                pct = round((completed / total_activities) * 100.0, 1)
+                raw_points.append({"label": label, "progress": pct})
+
+            # Scale to match cached current progress only when the requested period
+            # includes today (e.g., current month/year).
+            period_start = boundaries[0][1]
+            period_end = boundaries[-1][2]
+            includes_today = period_start <= today <= period_end
+
+            final_raw = float(raw_points[-1]["progress"]) if raw_points else 0.0
+
+            if includes_today and current_progress > 0:
+                if final_raw > 0:
+                    scale = current_progress / final_raw
+                    for p in raw_points:
+                        p["progress"] = round(min(100.0, float(p["progress"]) * scale), 1)
+                else:
+                    # Fallback: linear ramp to current progress
+                    steps = len(raw_points)
+                    for i, p in enumerate(raw_points):
+                        p["progress"] = round((current_progress / steps) * (i + 1), 1)
+
+            return raw_points
+
+        except Exception as e:
+            print(f"Error computing progress trend: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
     
     @staticmethod
     def compute_weekly_progress(firebase_uid: str, course_id: int) -> List[Dict]:
